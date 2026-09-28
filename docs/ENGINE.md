@@ -79,3 +79,22 @@ friction and restitution. A blast of power P removes a voxel of strength S out t
   then `world.step(1/60)`; see `tests/unit/physics.test.ts`.
 - Smoke tests drive the real page through `window.__engine` (`ready`, `framesRendered`, `bodyCount`,
   `triggerBlast()`, `startBench()`, `benchReport`, `stats()`).
+
+## 7. Building a full game (the game layer)
+
+For games with their own camera, UI and audio (see `src/game/` for PATHBREAKERS):
+
+| Piece | Where | What it gives you |
+| --- | --- | --- |
+| `SceneDef.preStep / update / onMessage` | sim worker | Game rules before/after each 60 Hz physics step; messages from the client. |
+| `ctx.send(data)` ↔ `engine.sendGame(data)` | both | Game-defined message channel between rules (worker) and client (main thread). |
+| `GameClient` + `src/app/clients.ts` | main thread | Registered per scene; owns the camera (`engine.camera`), input (`engine.controls`: keyboard, mouse, touch joystick/buttons, gamepad), UI and audio. `engine.slotPose(slot, pos, quat)` gives interpolated poses. |
+| `ctx.setGround(desc)` | sim | Big flat terrain: collider slabs (holes = pits/canals) + a nearest-sampled color map. |
+| `ctx.addKinematic(...)` + `world.setKinematicPose` | sim | Script-driven volumes (carriers, trains, doors) that push dynamic bodies. |
+| `VolumeOptions` | sim | `collide:false` (visual only), custom `colliders` (e.g. a chassis box), `destructible:false`, `lifetime`, `explosive`, body damping/CCD. |
+| `world.structures.register(volumeId, def)` | sim | Integrity: carving/impact damage (`structures.damage`) past `collapseAt` fractures the building into physics debris + dust; `onCollapse` callback. |
+| `carve(world, {kind:'box'\|'sphere', ...}, power)` / `querySolid` | sim | Oriented-box or sphere destruction and contact probing (vehicle blades, stomps). |
+| Explosive material `tnt` | sim | Detonates when carved or hit hard; chains via `world.scheduleExplosion`. |
+| `physics.createVehicle(chassis, wheels)` / `updateVehicle` | sim | Raycast-suspension vehicles (engine force > 0 drives toward -z; steer > 0 turns left). |
+| `world.emitParticle` / `emitSmoke` | sim | Debris, smoke and fire particles (one instanced draw call). |
+| `engine.restart(params)` | main | Restart or switch level without reloading the page. |

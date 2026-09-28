@@ -35,6 +35,15 @@ export class WorldView {
     return this.queue.length;
   }
 
+  /** Removes everything (engine restart). */
+  clear(): void {
+    for (const id of [...this.volumes.keys()]) this.removeVolume(id);
+    this.queue = [];
+    this.orphans.clear();
+    this.removed.clear();
+    this.bySlot.clear();
+  }
+
   addVolume(info: VolumeInfo): void {
     const group = new THREE.Group();
     group.position.fromArray(info.position);
@@ -124,7 +133,7 @@ export class WorldView {
       existing.version = r.version;
     } else {
       const mesh = new THREE.Mesh(g, this.material);
-      mesh.castShadow = true;
+      mesh.castShadow = view.info.castShadow !== false;
       mesh.receiveShadow = true;
       mesh.matrixAutoUpdate = false;
       view.group.add(mesh);

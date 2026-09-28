@@ -13,9 +13,12 @@ import { Environment } from '../render/environment.ts';
 import { Particles } from '../render/particles.ts';
 import { DynamicResolution } from '../render/dynamic-resolution.ts';
 import { createRenderer, type BackendName } from '../render/renderer.ts';
+import { GroundView } from '../render/ground-view.ts';
 import { WorldView } from '../render/world-view.ts';
 import type { PlayerInput, SimSettings, SimStats, SimToMain, Vec3 } from '../shared/protocol.ts';
-import { MAX_SLOTS, PLAYER_SLOT, TransformReader, interpolateSlot, transformBufferBytes } from '../shared/transforms.ts';
+import { MAX_SLOTS, PLAYER_SLOT, TransformReader, interpolateSlot, transformBufferBytes, type TransformSample } from '../shared/transforms.ts';
+import { CLIENTS } from './clients.ts';
+import type { GameClient } from './game-client.ts';
 import { Bench, type BenchReport } from './bench.ts';
 import { installDebugHandle } from './debug-handle.ts';
 import { SimHost } from './sim-host.ts';
@@ -29,7 +32,7 @@ const TARGET_FPS = 60;
 
 /** Main-thread engine: renderer, input, camera, the world mirror and debug tooling. */
 export class Engine {
-  readonly params: Params;
+  params: Params;
   readonly quality: QualityPreset;
   readonly renderer: THREE.WebGPURenderer;
   readonly backend: BackendName;
@@ -41,9 +44,19 @@ export class Engine {
   readonly env: Environment;
   readonly controls: Controls;
   readonly hud: Hud;
-  readonly host: SimHost;
-  readonly transforms: TransformReader;
-  readonly sharedTransforms: boolean;
+  host: SimHost;
+  transforms: TransformReader;
+  sharedTransforms: boolean;
+  readonly ground = new GroundView();
+  /** Scene-specific main-thread game (camera, input, UI, audio); null in sandbox scenes. */
+  client: GameClient | null = null;
+  /** True for engine sandbox scenes (no game client): default walker/fly controls and tools. */
+  readonly sandbox: boolean;
+  /** This frame's interpolated transform sample (valid during client.update). */
+  sample: TransformSample | null = null;
+  /** Where the sun's shadow box centers (defaults to the camera). */
+  shadowFocus: THREE.Vector3 | null = null;
+  readonly canvas: HTMLCanvasElement;
   framesRendered = 0;
   pixelRatio = 1;
   gpuInfo: GpuInfo | null = null;
@@ -59,7 +72,7 @@ export class Engine {
   private readonly pendingBlasts = new Map<number, (newBodies: number) => void>();
   private nextBlastId = 1;
   private tuning: HTMLElement | null = null;
-  private readonly ui: HTMLElement;
+  readonly ui: HTMLElement;
   private readonly flyPos = new THREE.Vector3(0, 3, 6);
   private readonly playerPos = new THREE.Vector3();
   private readonly tmpQuat = new THREE.Quaternion();
@@ -76,19 +89,23 @@ export class Engine {
     this.renderer = renderer;
     this.backend = backend;
     this.fly = params.fly;
+    this.canvas = canvas;
+    this.sandbox = CLIENTS[params.scene] === undefined;
 
     const q = this.quality;
     this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, q.viewDistance);
     this.camera.rotation.order = 'YXZ';
     this.env = new Environment(this.scene, renderer, q);
-    this.scene.add(this.world.root, this.particles.mesh);
+    this.scene.add(this.world.root, this.particles.mesh, this.ground.root);
     this.ui = ui;
 
     this.controls = new Controls(canvas, ui);
-    const crosshair = document.createElement('div');
-    crosshair.className = 'crosshair';
-    ui.append(crosshair);
-    this.addTouchButtons();
+    if (this.sandbox) {
+      const crosshair = document.createElement('div');
+      crosshair.className = 'crosshair';
+      ui.append(crosshair);
+      this.addTouchButtons();
+    }
     this.statusEl = document.createElement('div');
     this.statusEl.className = 'status';
     this.statusEl.hidden = true;
@@ -124,25 +141,89 @@ export class Engine {
       },
     });
 
-    const shared = window.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined' ? new SharedArrayBuffer(transformBufferBytes(MAX_SLOTS)) : null;
+    const shared = Engine.sharedBuffer();
     this.sharedTransforms = shared !== null;
     this.transforms = new TransformReader(shared, MAX_SLOTS);
-    this.host = new SimHost(params, shared, {
-      onSim: (msg) => this.onSimMessage(msg),
-      onMesh: (r) => this.world.enqueue(r),
-    });
-    document.addEventListener('visibilitychange', () => this.host.send({ type: 'pause', paused: document.hidden }));
+    this.host = this.spawnHost(shared);
+    document.addEventListener('visibilitychange', () => this.host.send({ type: 'pause', paused: document.hidden || this.paused }));
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
 
   static async create(canvas: HTMLCanvasElement, ui: HTMLElement, params: Params): Promise<Engine> {
-    const { renderer, backend } = await createRenderer(canvas, params.renderer);
+    const loader = CLIENTS[params.scene];
+    const [{ renderer, backend }, client] = await Promise.all([createRenderer(canvas, params.renderer), loader ? loader() : Promise.resolve(null)]);
     const engine = new Engine(params, renderer, backend, canvas, ui);
     void probeGpu().then((info) => (engine.gpuInfo = info));
     engine.installHandle();
+    if (client) {
+      engine.client = client;
+      await client.attach(engine);
+    }
     return engine;
+  }
+
+  private static sharedBuffer(): SharedArrayBuffer | null {
+    return window.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined' ? new SharedArrayBuffer(transformBufferBytes(MAX_SLOTS)) : null;
+  }
+
+  private spawnHost(shared: SharedArrayBuffer | null): SimHost {
+    return new SimHost(this.params, shared, {
+      onSim: (msg) => this.onSimMessage(msg),
+      onMesh: (r) => this.world.enqueue(r),
+    });
+  }
+
+  /** Simulation pause requested by the game (menus); also paused while the tab is hidden. */
+  paused = false;
+
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+    this.host.send({ type: 'pause', paused: paused || document.hidden });
+  }
+
+  /** Restarts the simulation (optionally with new params) without reloading the page. */
+  restart(params: Partial<Params> = {}): void {
+    this.params = { ...this.params, ...params };
+    this.host.dispose();
+    this.world.clear();
+    this.particles.clear();
+    this.ground.clear();
+    this.simReady = false;
+    this.simStats = null;
+    this.paused = false;
+    this.statusEl.hidden = true;
+    this.pendingBlasts.clear();
+    const shared = Engine.sharedBuffer();
+    this.sharedTransforms = shared !== null;
+    this.transforms = new TransformReader(shared, MAX_SLOTS);
+    this.sample = null;
+    this.host = this.spawnHost(shared);
+  }
+
+  /** Sends a message to the scene's game rules (SceneDef.onMessage) in the simulation worker. */
+  sendGame(data: unknown, transfer: Transferable[] = []): void {
+    this.host.send({ type: 'game', data }, transfer);
+  }
+
+  /** Interpolated pose of a transform slot for this frame. */
+  slotPose(slot: number, pos: THREE.Vector3, quat: THREE.Quaternion): boolean {
+    if (!this.sample) return false;
+    interpolateSlot(this.sample, slot, pos, quat);
+    return true;
+  }
+
+  /** Moves the far plane and fog so `offset` meters of camera distance don't eat the view distance. */
+  setViewOffset(offset: number): void {
+    const vd = this.quality.viewDistance;
+    this.camera.far = offset + vd;
+    this.camera.updateProjectionMatrix();
+    const fog = this.scene.fog as THREE.Fog | null;
+    if (fog) {
+      fog.near = offset + vd * 0.4;
+      fog.far = offset + vd;
+    }
   }
 
   start(): void {
@@ -165,7 +246,9 @@ export class Engine {
         this.flyPos.set(msg.spawn[0], msg.spawn[1] + 1.6, msg.spawn[2]);
         this.controls.yaw = msg.spawnYaw;
         this.settings = msg.settings;
-        this.tuning = createTuningPanel(this.ui, msg.settings, this.quality.name, (patch) => {
+        this.client?.onReady?.();
+        if (!this.sandbox) break;
+        this.tuning ??= createTuningPanel(this.ui, msg.settings, this.quality.name, (patch) => {
           Object.assign(this.settings!, patch);
           this.host.send({ type: 'settings', settings: patch });
         }).domElement.parentElement;
@@ -175,6 +258,12 @@ export class Engine {
       case 'status':
         this.statusEl.textContent = msg.text;
         this.statusEl.hidden = msg.text === '';
+        break;
+      case 'ground':
+        this.ground.set(msg.ground);
+        break;
+      case 'game':
+        this.client?.onMessage(msg.data);
         break;
       case 'particles':
         this.particles.spawn(msg.data);
@@ -286,10 +375,12 @@ export class Engine {
 
   private applyTransforms(): void {
     const sample = this.transforms.sample();
+    this.sample = sample;
     if (sample) {
       for (const [slot, view] of this.world.bySlot) interpolateSlot(sample, slot, view.group.position, view.group.quaternion);
       interpolateSlot(sample, PLAYER_SLOT, this.playerPos, this.tmpQuat);
     }
+    if (this.client) return;
     if (this.fly || !sample) this.camera.position.copy(this.flyPos);
     else this.camera.position.set(this.playerPos.x, this.playerPos.y + EYE_OFFSET, this.playerPos.z);
     this.camera.rotation.set(this.controls.pitch, this.controls.yaw, 0);
@@ -364,11 +455,13 @@ export class Engine {
     }
     this.lastFrame = time;
 
+    this.controls.pollGamepad(dt);
     this.world.processQueue(MESH_UPLOAD_BUDGET_MS);
-    this.updateInput(dt);
+    if (!this.client) this.updateInput(dt);
     this.applyTransforms();
+    this.client?.update(dt, time);
     this.particles.update(dt);
-    this.env.follow(this.camera.position);
+    this.env.follow(this.shadowFocus ?? this.camera.position);
 
     this.renderer.render(this.scene, this.camera);
     const info = this.renderer.info.render;
@@ -376,6 +469,7 @@ export class Engine {
     this.triangles = info.triangles;
     this.framesRendered++;
     this.hud.update(time);
+    this.controls.endFrame();
   }
 
   statsSnapshot(): Record<string, unknown> {

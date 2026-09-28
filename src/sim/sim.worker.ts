@@ -6,6 +6,7 @@ import { errorMessage, forwardWorkerErrors, workerScope } from '../shared/worker
 import { blast } from './destruction.ts';
 import { MeshDispatcher } from './mesh-dispatch.ts';
 import { RapierBackend } from './physics/rapier-backend.ts';
+import type { SceneContext, SceneDef } from './scene-api.ts';
 import { getScene } from './scenes/index.ts';
 import { SimWorld } from './world.ts';
 
@@ -19,6 +20,8 @@ function post(msg: SimToMain, transfer?: Transferable[]): void {
 }
 
 let world: SimWorld | null = null;
+let scene: SceneDef | null = null;
+let ctx: SceneContext | null = null;
 let writer: TransformWriter | null = null;
 let dispatcher: MeshDispatcher | null = null;
 let paletteVersion = -1;
@@ -26,6 +29,19 @@ let paused = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let last = 0;
 let acc = 0;
+/** Messages that arrive before the scene finished building. */
+const early: MainToSim[] = [];
+
+function flushOutputs(): void {
+  if (!world) return;
+  if (world.palette.version !== paletteVersion) {
+    paletteVersion = world.palette.version;
+    dispatcher?.setPalette(world.palette.colors);
+  }
+  world.flushMeshes();
+  const particles = world.takeParticles();
+  if (particles) post({ type: 'particles', data: particles }, [particles.buffer]);
+}
 
 function tick(): void {
   timer = undefined;
@@ -44,11 +60,7 @@ function tick(): void {
     if (n > 0) {
       const used = world.writeTransforms(writer.begin());
       writer.commit(used);
-      if (world.palette.version !== paletteVersion) {
-        paletteVersion = world.palette.version;
-        dispatcher?.setPalette(world.palette.colors);
-      }
-      world.flushMeshes();
+      flushOutputs();
     }
   } catch (err) {
     post(errorMessage(err));
@@ -62,26 +74,32 @@ async function init(msg: Extract<MainToSim, { type: 'init' }>): Promise<void> {
   writer = new TransformWriter(msg.shared, MAX_SLOTS, (frame, time, transforms) =>
     post({ type: 'frame', frame, time, transforms }, [transforms.buffer]),
   );
-  world = new SimWorld(
+  const w = new SimWorld(
     msg.params,
     dispatcher,
     {
       volumeAdded: (volume) => post({ type: 'volumeAdded', volume }),
       volumeRemoved: (id) => post({ type: 'volumeRemoved', id }),
       status: (text) => post({ type: 'status', text }),
+      ground: (ground) => post({ type: 'ground', ground }),
+      game: (data, transfer) => post({ type: 'game', data }, transfer),
     },
     physics,
   );
-  const scene = getScene(msg.params.scene);
-  const ctx = world.sceneContext();
+  scene = getScene(msg.params.scene);
+  ctx = w.sceneContext();
   await scene.build(ctx);
-  if (scene.update) world.sceneUpdate = (dt) => scene.update!(ctx, dt);
-  world.syncColliders(); // build static colliders up front, not inside the first step
-  world.spawnPlayer();
-  paletteVersion = world.palette.version;
-  dispatcher.setPalette(world.palette.colors);
-  world.flushMeshes();
-  post({ type: 'ready', scene: scene.name, spawn: world.spawn, spawnYaw: world.spawnYaw, blastTarget: world.blastTarget, settings: world.settings });
+  const s = scene, c = ctx;
+  if (s.preStep) w.scenePreStep = (dt) => s.preStep!(c, dt);
+  if (s.update) w.sceneUpdate = (dt) => s.update!(c, dt);
+  w.syncColliders(); // build static colliders up front, not inside the first step
+  if (s.player !== false) w.spawnPlayer();
+  world = w;
+  paletteVersion = w.palette.version;
+  dispatcher.setPalette(w.palette.colors);
+  flushOutputs();
+  post({ type: 'ready', scene: s.name, spawn: w.spawn, spawnYaw: w.spawnYaw, blastTarget: w.blastTarget, settings: w.settings });
+  for (const m of early.splice(0)) handle(m);
   setInterval(() => {
     if (world) post({ type: 'stats', stats: world.stats() });
   }, 250);
@@ -94,7 +112,10 @@ function handle(msg: MainToSim): void {
     init(msg).catch((err: unknown) => post(errorMessage(err)));
     return;
   }
-  if (!world) return;
+  if (!world) {
+    if (msg.type !== 'input') early.push(msg);
+    return;
+  }
   switch (msg.type) {
     case 'input':
       world.input = msg.input;
@@ -102,7 +123,6 @@ function handle(msg: MainToSim): void {
     case 'blast': {
       const r = blast(world, msg.origin, msg.dir, msg.radius, msg.power);
       post({ type: 'blastDone', id: msg.id, newBodies: r.newBodies, removedVoxels: r.removedVoxels });
-      if (r.particles.length) post({ type: 'particles', data: r.particles }, [r.particles.buffer]);
       break;
     }
     case 'spawnCrate':
@@ -110,6 +130,9 @@ function handle(msg: MainToSim): void {
       break;
     case 'settings':
       world.applySettings(msg.settings);
+      break;
+    case 'game':
+      if (scene?.onMessage && ctx) scene.onMessage(ctx, msg.data);
       break;
     case 'pause':
       paused = msg.paused;

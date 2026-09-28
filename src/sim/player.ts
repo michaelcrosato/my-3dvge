@@ -22,6 +22,8 @@ export class Player {
   private readonly physics: PhysicsBackend;
   private readonly spawn: Vec3;
   gravity = -9.81;
+  /** Disabled while driving: no collision, no movement. */
+  enabled = true;
 
   constructor(physics: PhysicsBackend, feet: Vec3) {
     this.physics = physics;
@@ -39,7 +41,22 @@ export class Player {
     return this.physics.characterBody(this.character);
   }
 
+  /** Enables/disables the walker (e.g. while the player sits in a vehicle). */
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+    this.physics.setCharacterEnabled(this.character, enabled);
+    this.vel = [0, 0, 0];
+  }
+
+  /** Moves the walker so its feet are at `feet`. */
+  teleport(feet: Vec3): void {
+    this.position = [feet[0], feet[1] + PLAYER_CENTER + 0.05, feet[2]];
+    this.vel = [0, 0, 0];
+    this.physics.teleportCharacter(this.character, this.position);
+  }
+
   update(dt: number, input: PlayerInput): void {
+    if (!this.enabled) return;
     if (input.fly) {
       // The free-fly camera is main-thread only; the body waits where it was left.
       this.vel = [0, 0, 0];
