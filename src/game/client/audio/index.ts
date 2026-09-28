@@ -1,15 +1,30 @@
 /**
  * PATHBREAKERS audio: procedural WebAudio sound effects and music (no audio files — everything is
- * synthesized, so nothing to download and nothing third-party). This file is the contract; the stub
- * below is silent until the audio pass.
+ * synthesized, so nothing to download and nothing third-party).
+ *
+ * - One-shots: capped voice pool (24), 30 ms rate limit per effect, distance attenuation + stereo pan
+ *   relative to the listener set with setListener().
+ * - Loops: per-vehicle engines, thruster/slide/fuse, carrier rumble, collision alarm.
+ * - Music: lookahead-scheduled country-rock with a "collision imminent" variant at tension ≥ 0.75.
+ * - Master: compressor + soft-clip safety stage (never exceeds ±0.98).
+ * Everything is a silent no-op until unlock() is called from a user gesture; state set before that is
+ * remembered and applied on unlock.
  */
 import type { VehicleKind, XYZ } from '../../shared/types.ts';
+import { AudioEngine } from './engine.ts';
 
 export type SfxName =
   | 'explosion' | 'bigExplosion' | 'crumble' | 'collapse' | 'impact' | 'metalHit' | 'glass' | 'rdu'
   | 'survivor' | 'rescue' | 'dish' | 'enter' | 'exit' | 'horn' | 'turbo' | 'missile' | 'stomp'
   | 'thrustStart' | 'land' | 'warning' | 'countdown' | 'go' | 'pathClear' | 'carrierSafe' | 'fail'
   | 'medal' | 'uiClick' | 'uiBack' | 'uiMove' | 'fuse' | 'tick' | 'skid' | 'aligned' | 'radio' | 'pickup' | 'reset';
+
+export const SFX_NAMES: readonly SfxName[] = [
+  'explosion', 'bigExplosion', 'crumble', 'collapse', 'impact', 'metalHit', 'glass', 'rdu', 'survivor', 'rescue',
+  'dish', 'enter', 'exit', 'horn', 'turbo', 'missile', 'stomp', 'thrustStart', 'land', 'warning', 'countdown', 'go',
+  'pathClear', 'carrierSafe', 'fail', 'medal', 'uiClick', 'uiBack', 'uiMove', 'fuse', 'tick', 'skid', 'aligned', 'radio',
+  'pickup', 'reset',
+];
 
 export type MusicTrack = 'title' | 'mission' | 'results' | 'bonus' | 'none';
 
@@ -42,16 +57,5 @@ export interface GameAudio {
 }
 
 export function createGameAudio(): GameAudio {
-  return {
-    unlock() {},
-    setVolumes() {},
-    play() {},
-    setListener() {},
-    setEngine() {},
-    setLoop() {},
-    setCarrier() {},
-    setAlarm() {},
-    setMusic() {},
-    update() {},
-  };
+  return new AudioEngine();
 }
