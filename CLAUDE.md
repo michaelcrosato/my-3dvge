@@ -1,0 +1,38 @@
+# my-3dvge
+
+Physics-first, Teardown-inspired destructible voxel engine for the browser (three.js WebGPU + WebGL2
+fallback, Rapier in a worker, Vite + strict TypeScript). Built as an **engine for AI agents to make
+games on**. Primary target: Galaxy S26 / Chrome Android at a steady 60 fps. Full spec:
+**[docs/SPEC.md](docs/SPEC.md)** — read it before architectural changes. Game/scene API: `docs/ENGINE.md`.
+
+## Commands
+
+```bash
+npm ci                 # install (Node LTS from .nvmrc)
+npm run dev            # Vite dev server with COOP/COEP headers
+npm run typecheck      # tsc --noEmit (strict)
+npm test               # Vitest unit + physics tests
+npm run build          # production build → dist/
+npm run preview        # serve dist/ with the same headers as Vercel
+npm run test:e2e       # Playwright smoke test (local preview; set BASE_URL to test a deployment)
+npm run gen:assets     # regenerate procedural .vox assets (M4+)
+```
+
+## Conventions
+
+- Units are meters; voxel size 0.1 m; chunks are 32³, 1 byte/voxel, palette of 255 entries.
+- Main thread = render + input only. All game state lives in the simulation worker. Pure logic
+  (meshing, flood fill, box merging, .vox) lives in side-effect-free modules with unit tests.
+- Physics goes through the `PhysicsBackend` interface — never import Rapier outside its backend.
+- No new runtime dependency without a written reason in the PR. Self-host everything (no CDNs).
+- TypeScript strict + `erasableSyntaxOnly` (no enums/namespaces/parameter properties) so Node can run
+  shared modules directly from `scripts/`.
+
+## Workflow rules
+
+- One branch + PR per milestone; conventional commits; squash-merge only when GitHub Actions **and**
+  the Vercel preview are green; tag `main` per milestone (M0 v0.1.0 … M4 v0.5.0).
+- Before pushing: `npm run typecheck && npm test && npm run build && npm run test:e2e`.
+- The owner tests only through Vercel URLs on a phone: keep the HUD, error overlay and diagnostics
+  working, and show the commit SHA so builds can be verified.
+- Never commit secrets, `.env*` or `.vercel/`.
