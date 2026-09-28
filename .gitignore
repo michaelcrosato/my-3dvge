@@ -10,3 +10,6 @@ blob-report/
 coverage/
 *.log
 .DS_Store
+
+# Agent worktrees
+.claude/worktrees/

@@ -101,6 +101,10 @@ export interface PhysicsBackend {
   /** Teleports a body (optionally zeroing its velocity). */
   setPose(body: BodyHandle, position: Vec3, rotation: Quat, resetVelocity?: boolean): void;
   setGravityScale(body: BodyHandle, scale: number): void;
+  setLinvel(body: BodyHandle, v: Vec3): void;
+  setAngvel(body: BodyHandle, w: Vec3): void;
+  /** Allow rotation only about the chosen world axes (e.g. y only for upright walkers). */
+  setEnabledRotations(body: BodyHandle, x: boolean, y: boolean, z: boolean): void;
 
   raycast(origin: Vec3, dir: Vec3, maxDist: number, excludeBody?: BodyHandle): RayHit | null;
   /** Dynamic bodies whose colliders intersect a sphere. */

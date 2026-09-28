@@ -77,6 +77,10 @@ export interface LevelStatic {
   timeAttackTimes: Record<Medal, number> | null;
   /** Ground color map for the radar (same data the renderer uses). */
   map: { width: number; height: number; data: Uint8Array };
+  /** RDU lamp positions (index = RDU id); lit ones arrive as `rdu` events / snapshot.litRdus. */
+  rdus?: XYZ[];
+  /** Satellite dish positions. */
+  dishes?: XYZ[];
 }
 
 export interface MeterInfo {
@@ -147,6 +151,12 @@ export interface GameSnapshot {
   aligned: boolean;
   /** Bonus stage: remaining targets. */
   targetsLeft: number;
+  /** Indices of lit RDUs (full list, for renderers that join mid-level). */
+  litRdus?: number[];
+  /** Survivors with a rescue animation/state for rendering. */
+  survivorsAll?: { x: number; y: number; z: number; state: 'hidden' | 'waiting' | 'rescued' }[];
+  /** Sliding/boost/stomp visual hints for the controlled vehicle's damage zone (world box), if active. */
+  zone?: { center: XYZ; half: XYZ; yaw: number } | null;
 }
 
 export type GameEvent =
@@ -154,7 +164,7 @@ export type GameEvent =
   | { e: 'hit'; id: number; x: number; y: number; z: number; strength: number; vehicle: VehicleKind | null }
   | { e: 'impact'; x: number; y: number; z: number; strength: number }
   | { e: 'explosion'; x: number; y: number; z: number; radius: number }
-  | { e: 'rdu'; n: number; total: number; x: number; y: number; z: number }
+  | { e: 'rdu'; index?: number; n: number; total: number; x: number; y: number; z: number }
   | { e: 'survivorFreed'; x: number; y: number; z: number }
   | { e: 'survivorRescued'; n: number; total: number }
   | { e: 'dish'; n: number; total: number }
@@ -210,6 +220,9 @@ export interface GameInput {
   jump: boolean;
   action: boolean;
   sprint: boolean;
+  /** Press counters. */
+  actionCount: number;
+  jumpCount: number;
   enter: number;
   reset: number;
 }
