@@ -4,6 +4,10 @@ Physics-first, Teardown-inspired destructible voxel engine for the browser (thre
 fallback, Rapier in a worker, Vite + strict TypeScript). Built as an **engine for AI agents to make
 games on**. Primary target: Galaxy S26 / Chrome Android at a steady 60 fps. Full spec:
 **[docs/SPEC.md](docs/SPEC.md)** — read it before architectural changes. Game/scene API: `docs/ENGINE.md`.
+The shipped tech-demo game is **PATHBREAKERS** (Blast Corps-inspired): design in **[docs/GAME.md](docs/GAME.md)**,
+code in `src/game/` (sim rules in `sim/`, voxel art in `sim/art/`, main-thread client/camera in `client/`,
+UI in `client/ui/`, procedural WebAudio in `client/audio/`, contract in `shared/types.ts`). It is the default
+scene (`/`); engine sandboxes stay at `?scene=test|city|stress|gallery`.
 
 ## Commands
 
@@ -26,6 +30,8 @@ npm run gen:assets     # regenerate procedural .vox assets → public/vox (node 
   `player.ts`, `physics/` (PhysicsBackend + Rapier), `scenes/` (**games live here**, see docs/ENGINE.md)
 - `src/voxel` pure logic: volume/chunks, mesher (+AO), box merging, flood fill, .vox, palette/materials
 - `src/mesher` mesher worker · `src/shared` protocol + SharedArrayBuffer transform ring
+- `src/app/clients.ts` registers per-scene main-thread game clients (`GameClient`); `src/game/` is one
+- Dev harnesses: `?harness=ui` (all game screens with fake data), `?harness=audio` (every sound/music state)
 
 ## Conventions
 
