@@ -71,14 +71,13 @@ export class Controls {
 
     window.addEventListener('keydown', (e) => this.onKey(e, true));
     window.addEventListener('keyup', (e) => this.onKey(e, false));
-    window.addEventListener('blur', () => {
-      this.keys.clear();
-      this.held.clear();
-    });
+    window.addEventListener('blur', () => this.reset());
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.reset(); });
     canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
     canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
     canvas.addEventListener('pointercancel', (e) => this.onPointerUp(e));
+    canvas.addEventListener('lostpointercapture', (e) => this.onPointerUp(e));
     document.addEventListener('mousemove', (e) => {
       if (document.pointerLockElement === canvas) this.rotate(e.movementX * this.mouseSensitivity, e.movementY * this.mouseSensitivity);
     });
@@ -90,6 +89,21 @@ export class Controls {
 
   get pointerLocked(): boolean {
     return document.pointerLockElement === this.canvas;
+  }
+
+  /** Discard held input and pending presses after focus loss or a level transition. */
+  reset(): void {
+    this.keys.clear();
+    this.keysPressed.clear();
+    this.held.clear();
+    this.actions.length = 0;
+    this.joyId = this.lookId = -1;
+    this.joyVec = [0, 0];
+    this.joyBase.hidden = true;
+    this.gamepad.move = [0, 0];
+    this.gamepad.look = [0, 0];
+    this.gamepad.lt = this.gamepad.rt = 0;
+    this.gamepad.pressed.clear();
   }
 
   /** Adds an on-screen touch button. `action` fires on press; `hold` is readable via isHeld(). */
@@ -206,18 +220,19 @@ export class Controls {
   }
 
   private onKey(e: KeyboardEvent, down: boolean): void {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-    if (down) {
-      if (!e.repeat) {
-        this.keysPressed.add(e.code);
-        if (e.code === 'KeyE') this.actions.push('spawn');
-        if (e.code === 'KeyF') this.actions.push('toggleFly');
-      }
-      if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
-      this.keys.add(e.code);
-    } else {
+    // A release may land on a menu input after focus changes; always clear the original press.
+    if (!down) {
       this.keys.delete(e.code);
+      return;
     }
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (!e.repeat) {
+      this.keysPressed.add(e.code);
+      if (e.code === 'KeyE') this.actions.push('spawn');
+      if (e.code === 'KeyF') this.actions.push('toggleFly');
+    }
+    if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+    this.keys.add(e.code);
   }
 
   private onPointerDown(e: PointerEvent): void {

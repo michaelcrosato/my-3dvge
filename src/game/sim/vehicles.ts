@@ -389,6 +389,7 @@ export class WheeledVehicle extends Vehicle {
 /** PLOWHORSE: rams with its blade; too weak for stone and metal. */
 export class Dozer extends WheeledVehicle {
   private tick = 0;
+  private grinding = false;
 
   protected override special(intent: DriveIntent | null): void {
     if (intent?.actionPressed) this.hooks.onEvent({ e: 'horn' });
@@ -400,6 +401,8 @@ export class Dozer extends WheeledVehicle {
     this.activity = null;
     const speed = this.speed();
     this.tick++;
+    const grinding = this.throttle > 0.4 && Math.abs(speed) < 0.8;
+    if (!grinding) this.grinding = false;
     const [w] = this.size;
     // The blade zone covers the whole chassis height (0.15–2.25 m) so no uncut lintel can jam it.
     if (speed > 1.2 && this.tick % 2 === 0) {
@@ -411,15 +414,18 @@ export class Dozer extends WheeledVehicle {
         const f = Math.max(0.55, 1 - removed / 3000);
         physics.setLinvel(this.sv.body, [v[0] * f, v[1], v[2] * f]);
       }
-    } else if (this.throttle > 0.4 && Math.abs(speed) < 0.8) {
+    } else if (grinding && this.tick % 6 === 0) {
       // Pushing against a wall at full throttle grinds it: occasional bites plus steady wear.
       const pose = this.originPose();
-      if (this.tick % 6 === 0) this.wreckBox([w / 2, 1.2, -0.4], [1.75, 1.05, 0.6], 2.2, 3, pose);
+      this.wreckBox([w / 2, 1.2, -0.4], [1.75, 1.05, 0.6], 2.2, 3, pose);
       const center = this.toWorld([w / 2, 1.2, -0.45], pose);
-      const probe = querySolid(this.world, { kind: 'box', center, half: [1.75, 1.05, 0.6], rotation: pose.rot }, (sv) => sv.kind === 'static' && this.hooks.canWreck(sv));
-      for (const sv of probe.byVolume.keys()) this.world.structures.damage(sv.id, 900 * dt);
-      if (probe.count > 0) this.activity = 'grinding';
+      const probe = querySolid(this.world, { kind: 'box', center, half: [1.75, 1.05, 0.6], rotation: pose.rot },
+        (sv) => sv.kind === 'static' && this.hooks.canWreck(sv),
+        (v) => this.world.palette.material(v).strength * this.world.settings.strengthScale <= 2.2);
+      for (const sv of probe.byVolume.keys()) this.world.structures.damage(sv.id, 900 * dt * 6);
+      this.grinding = probe.count > 0;
     }
+    if (this.grinding) this.activity = 'grinding';
   }
 }
 

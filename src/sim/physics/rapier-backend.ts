@@ -24,9 +24,10 @@ export class RapierBackend implements PhysicsBackend {
   readonly name = 'rapier3d-simd';
   private readonly world: World;
   private readonly bodies = new Map<number, RigidBody>();
-  private readonly groups = new Map<number, Collider[]>();
+  private readonly groups = new Map<number, { body: BodyHandle; colliders: Collider[] }>();
+  private readonly bodyGroups = new Map<BodyHandle, Set<ColliderGroup>>();
   private readonly characters = new Map<number, Character>();
-  private readonly vehicles = new Map<number, { controller: VehicleController; wheels: number }>();
+  private readonly vehicles = new Map<number, { controller: VehicleController; wheels: number; chassis: BodyHandle }>();
   private nextGroup = 1;
   private nextCharacter = 1;
   private nextVehicle = 1;
@@ -73,6 +74,16 @@ export class RapierBackend implements PhysicsBackend {
   removeBody(h: BodyHandle): void {
     const b = this.bodies.get(h);
     if (!b) return;
+    for (const [id, vehicle] of this.vehicles) if (vehicle.chassis === h) this.removeVehicle(id);
+    for (const [id, character] of this.characters) {
+      if (character.body === b) {
+        this.world.removeCharacterController(character.controller);
+        this.characters.delete(id);
+      }
+    }
+    // Rapier removes attached colliders itself; release the JS references and obsolete group ids.
+    for (const g of this.bodyGroups.get(h) ?? []) this.groups.delete(g);
+    this.bodyGroups.delete(h);
     this.bodies.delete(h);
     this.world.removeRigidBody(b);
   }
@@ -98,15 +109,24 @@ export class RapierBackend implements PhysicsBackend {
       list.push(this.world.createCollider(desc, body));
     }
     const g = this.nextGroup++;
-    this.groups.set(g, list);
+    this.groups.set(g, { body: h, colliders: list });
+    let owned = this.bodyGroups.get(h);
+    if (!owned) {
+      owned = new Set();
+      this.bodyGroups.set(h, owned);
+    }
+    owned.add(g);
     return g;
   }
 
   removeColliders(g: ColliderGroup): void {
-    const list = this.groups.get(g);
-    if (!list) return;
+    const group = this.groups.get(g);
+    if (!group) return;
     this.groups.delete(g);
-    for (const c of list) this.world.removeCollider(c, true);
+    const owned = this.bodyGroups.get(group.body);
+    owned?.delete(g);
+    if (owned?.size === 0) this.bodyGroups.delete(group.body);
+    for (const c of group.colliders) this.world.removeCollider(c, true);
   }
 
   readTransform(h: BodyHandle, out: Float32Array, o: number): void {
@@ -301,7 +321,7 @@ export class RapierBackend implements PhysicsBackend {
       controller.setWheelSideFrictionStiffness(i, w.sideFriction);
     });
     const h = this.nextVehicle++;
-    this.vehicles.set(h, { controller, wheels: wheels.length });
+    this.vehicles.set(h, { controller, wheels: wheels.length, chassis });
     return h;
   }
 

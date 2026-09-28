@@ -1,4 +1,5 @@
 import type { LevelId, MissionResults, ModeId, SaveData } from '../shared/types.ts';
+import { CAMERA_MODES } from '../shared/types.ts';
 import { completionPercent } from './ui/format.ts';
 
 const KEY = 'pathbreakers.save.v1';
@@ -12,15 +13,40 @@ export function defaultSave(): SaveData {
 }
 
 export function loadSave(): SaveData {
+  const base = defaultSave();
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return defaultSave();
-    const d = JSON.parse(raw) as Partial<SaveData>;
-    const base = defaultSave();
-    return { best: d.best ?? base.best, unlocked: { ...base.unlocked, ...d.unlocked }, settings: { ...base.settings, ...d.settings } };
+    if (!raw) return base;
+    const d = object(JSON.parse(raw));
+    const settings = object(d.settings), unlocked = object(d.unlocked), best = object(d.best);
+    for (const key of ['music', 'sfx'] as const) {
+      const value = settings[key];
+      if (typeof value === 'number' && Number.isFinite(value)) base.settings[key] = Math.max(0, Math.min(1, value));
+    }
+    if (CAMERA_MODES.includes(settings.camera as SaveData['settings']['camera'])) base.settings.camera = settings.camera as SaveData['settings']['camera'];
+    for (const key of ['invertY', 'assist'] as const) if (typeof settings[key] === 'boolean') base.settings[key] = settings[key];
+    for (const key of ['quarry', 'timeAttack'] as const) if (typeof unlocked[key] === 'boolean') base.unlocked[key] = unlocked[key];
+    for (const level of ['cinder', 'quarry'] as const) for (const mode of ['mission', 'timeAttack'] as const) {
+      const key = `${level}:${mode}` as const;
+      const record = object(best[key]);
+      if (typeof record.time !== 'number' || !Number.isFinite(record.time) || record.time < 0) continue;
+      const medals: MissionResults['medals'] = {};
+      const storedMedals = object(record.medals);
+      for (const kind of ['carrier', 'completion', 'time'] as const) {
+        const medal = storedMedals[kind];
+        if (typeof medal === 'string' && Object.hasOwn(RANK, medal)) medals[kind] = medal as keyof typeof RANK;
+      }
+      const completion = typeof record.completion === 'number' && Number.isFinite(record.completion) ? Math.max(0, Math.min(100, record.completion)) : 0;
+      base.best[key] = { time: record.time, completion, medals };
+    }
   } catch {
-    return defaultSave();
+    // Invalid JSON or unavailable storage: use the defaults.
   }
+  return base;
+}
+
+function object(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 export function writeSave(s: SaveData): void {

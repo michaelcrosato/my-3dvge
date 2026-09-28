@@ -141,6 +141,10 @@ class PathbreakersClient implements GameClient {
   }
 
   private resetInputState(): void {
+    this.screenAfter = null;
+    this.fuses = [];
+    this.lastAligned = false;
+    this.engine.controls.reset();
     this.counters.enter = this.counters.reset = this.counters.action = this.counters.jump = 0;
     this.actionWas = this.jumpWas = false;
     this.audio.setLoop('slide', false);

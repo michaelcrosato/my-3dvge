@@ -89,13 +89,14 @@ export class VoxelVolume implements VoxelGrid {
     }
     this.dirtyMesh.add(ci);
     this.dirtyCollider.add(ci);
-    // Neighbor meshes sample this voxel through their padding.
-    if (lx === 0) this.markMeshDirty(x - 1, y, z);
-    else if (lx === CHUNK_MASK) this.markMeshDirty(x + 1, y, z);
-    if (ly === 0) this.markMeshDirty(x, y - 1, z);
-    else if (ly === CHUNK_MASK) this.markMeshDirty(x, y + 1, z);
-    if (lz === 0) this.markMeshDirty(x, y, z - 1);
-    else if (lz === CHUNK_MASK) this.markMeshDirty(x, y, z + 1);
+    // AO samples the full padding shell, including diagonal chunks at edges and corners.
+    const dx = lx === 0 ? -1 : lx === CHUNK_MASK ? 1 : 0;
+    const dy = ly === 0 ? -1 : ly === CHUNK_MASK ? 1 : 0;
+    const dz = lz === 0 ? -1 : lz === CHUNK_MASK ? 1 : 0;
+    for (let iz = 0; iz <= (dz === 0 ? 0 : 1); iz++)
+      for (let iy = 0; iy <= (dy === 0 ? 0 : 1); iy++)
+        for (let ix = 0; ix <= (dx === 0 ? 0 : 1); ix++)
+          if (ix || iy || iz) this.markMeshDirty(x + ix * dx, y + iy * dy, z + iz * dz);
   }
 
   private markMeshDirty(x: number, y: number, z: number): void {

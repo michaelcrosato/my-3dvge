@@ -3,8 +3,9 @@
  *
  * With cross-origin isolation a SharedArrayBuffer holds a 3-frame ring: the worker writes frame f into
  * ring slot f % 3 and then publishes f atomically; the renderer reads frames f and f-1 and interpolates.
- * The writer never touches those two slots while producing f+1, so reads are tear-free. Without
- * isolation the worker posts each frame's Float32Array instead (same reader API).
+ * Readers copy and validate per-frame sequence numbers: a stalled renderer must not retain live ring
+ * views that the worker can wrap around and overwrite. Without isolation the worker posts each frame's
+ * Float32Array instead (same reader API).
  *
  * Per body slot: px, py, pz, qx, qy, qz, qw, owner volume id (0 = player / none).
  */
@@ -13,7 +14,7 @@ export const SLOT_FLOATS = 8;
 export const MAX_SLOTS = 2048;
 export const PLAYER_SLOT = 0;
 const RING = 3;
-const HEADER_BYTES = 64; // Int32 [0] = latest frame; Float64 times at byte 16 + 8·ring
+const HEADER_BYTES = 64; // Int32 [0] = latest frame, [1..3] = slot sequences; Float64 times at byte 16
 
 export function transformBufferBytes(slots: number): number {
   return HEADER_BYTES + RING * slots * SLOT_FLOATS * 4;
@@ -52,7 +53,10 @@ export class TransformWriter {
 
   /** Buffer to fill for the next frame. */
   begin(): Float32Array {
-    return this.header ? this.ring[(this.frame + 1) % RING]! : this.fallback;
+    if (!this.header) return this.fallback;
+    const next = this.frame + 1;
+    Atomics.store(this.header, 1 + next % RING, -next); // in progress
+    return this.ring[next % RING]!;
   }
 
   /** Publishes the frame; `usedFloats` bounds the copy in postMessage mode. */
@@ -61,6 +65,7 @@ export class TransformWriter {
     const now = absoluteNow();
     if (this.header && this.times) {
       this.times[this.frame % RING] = now;
+      Atomics.store(this.header, 1 + this.frame % RING, this.frame);
       Atomics.store(this.header, 0, this.frame);
     } else if (this.post) {
       this.post(this.frame, now, this.fallback.slice(0, usedFloats));
@@ -81,9 +86,14 @@ export class TransformReader {
   private readonly ring: Float32Array[];
   private posted: { frame: number; time: number; data: Float32Array }[] = [];
   private readonly stepMs: number;
+  private copied: { frame: number; time: number; prev: Float32Array; curr: Float32Array } | null = null;
+  private scratchPrev: Float32Array;
+  private scratchCurr: Float32Array;
 
   constructor(shared: SharedArrayBuffer | null, slots: number, stepMs = 1000 / 60) {
     this.stepMs = stepMs;
+    this.scratchPrev = new Float32Array(shared ? slots * SLOT_FLOATS : 0);
+    this.scratchCurr = new Float32Array(shared ? slots * SLOT_FLOATS : 0);
     if (shared) {
       this.header = new Int32Array(shared, 0, 4);
       this.times = new Float64Array(shared, 16, RING);
@@ -104,11 +114,24 @@ export class TransformReader {
   sample(now = absoluteNow()): TransformSample | null {
     let prev: Float32Array, curr: Float32Array, tCurr: number, frame: number;
     if (this.header && this.times) {
-      frame = Atomics.load(this.header, 0);
-      if (frame < 1) return null;
-      curr = this.ring[frame % RING]!;
-      prev = frame >= 2 ? this.ring[(frame - 1) % RING]! : curr;
-      tCurr = this.times[frame % RING]!;
+      // Bounded retries keep the render loop responsive even if the worker laps it during the copy.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const f = Atomics.load(this.header, 0);
+        if (f < 1 || f === this.copied?.frame) break;
+        const p = Math.max(1, f - 1), ci = f % RING, pi = p % RING;
+        if (Atomics.load(this.header, 1 + ci) !== f || Atomics.load(this.header, 1 + pi) !== p) continue;
+        this.scratchCurr.set(this.ring[ci]!);
+        this.scratchPrev.set(this.ring[pi]!);
+        const time = this.times[ci]!;
+        if (Atomics.load(this.header, 1 + ci) !== f || Atomics.load(this.header, 1 + pi) !== p) continue;
+        const old = this.copied;
+        this.copied = { frame: f, time, prev: this.scratchPrev, curr: this.scratchCurr };
+        this.scratchPrev = old?.prev ?? new Float32Array(this.scratchPrev.length);
+        this.scratchCurr = old?.curr ?? new Float32Array(this.scratchCurr.length);
+        break;
+      }
+      if (!this.copied) return null;
+      ({ prev, curr, frame, time: tCurr } = this.copied);
     } else {
       const n = this.posted.length;
       if (n === 0) return null;

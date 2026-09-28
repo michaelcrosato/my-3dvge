@@ -21,6 +21,30 @@ function groundVolume(world: SimWorld, size = 64, thickness = 4): VoxelVolume {
 }
 
 describe('physics (Node + Rapier)', () => {
+  it('releases collider groups and controllers when their parent body is removed', async () => {
+    const physics = await RapierBackend.create();
+    const box = { cx: 0, cy: 0, cz: 0, hx: 1, hy: 1, hz: 1, density: 100, friction: 0.5, restitution: 0 };
+    for (let i = 0; i < 30; i++) {
+      const body = physics.createBody('dynamic', [0, 2, 0], [0, 0, 0, 1]);
+      const group = physics.addBoxes(body, [box]);
+      physics.addBoxes(body, []);
+      const vehicle = physics.createVehicle(body, []);
+      physics.removeBody(body);
+      // Late cleanup is safe, including after Rapier recycles handles.
+      physics.removeColliders(group);
+      physics.removeVehicle(vehicle);
+    }
+    expect(physics.colliderCount()).toBe(0);
+    // Rapier's count alone misses retained JS wrappers (the original leak).
+    expect(physics).toHaveProperty('groups.size', 0);
+    expect(physics).toHaveProperty('bodyGroups.size', 0);
+    expect(physics).toHaveProperty('vehicles.size', 0);
+    const character = physics.createCharacter([0, 2, 0], { radius: 0.3, halfHeight: 0.6, stepHeight: 0.15, maxSlopeDeg: 50 });
+    physics.removeBody(physics.characterBody(character));
+    expect(physics).toHaveProperty('characters.size', 0);
+    expect(physics.colliderCount()).toBe(0);
+  });
+
   it('a crate dropped on the ground comes to rest within 3 s', async () => {
     const world = await makeWorld();
     const size = 64;

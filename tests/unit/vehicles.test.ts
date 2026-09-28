@@ -46,6 +46,22 @@ async function arena() {
 }
 
 describe('vehicle destruction mechanics', () => {
+  it('PLOWHORSE cannot grind through stone or metal', async () => {
+    for (const material of ['stone', 'metal'] as const) {
+      const a = await arena();
+      const paletteIndex = a.world.palette.add(0x777777, material);
+      const volume = new VoxelVolume(40, 30, 40);
+      volume.fillBox(0, 0, 0, 40, 30, 40, paletteIndex);
+      const sv = a.world.addVolume('static', volume, [4, 0, -2], [0, 0, 0, 1], 'scene');
+      const structure = a.world.structures.register(sv.id);
+      const dozer = spawnVehicle(a.hooks, a.kit, 'dozer', -6, 0, -Math.PI / 2);
+      a.drive(dozer, { throttle: 1 }, 7);
+      expect(dozer.center()[0]).toBeGreaterThan(0); // reached the wall
+      expect(structure.damage).toBe(0);
+      expect(volume.voxelCount).toBe(40 * 30 * 40);
+    }
+  });
+
   it('PLOWHORSE rams a brick building and grinds into it', async () => {
     const a = await arena();
     const s = a.building(6, 0);
