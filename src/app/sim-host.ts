@@ -43,6 +43,16 @@ export class SimHost {
     this.send({ type: 'init', params, meshPorts: ports, shared }, ports);
   }
 
+  /** Stops the simulation and mesher workers (engine restart). */
+  dispose(): void {
+    this.sim.onmessage = null;
+    this.sim.terminate();
+    for (const m of this.meshers) {
+      m.onmessage = null;
+      m.terminate();
+    }
+  }
+
   send(msg: MainToSim, transfer: Transferable[] = []): void {
     this.sim.postMessage(msg, transfer);
   }

@@ -32,6 +32,7 @@ export class Hud {
   private readonly text: HTMLPreElement;
   private readonly actions: HTMLDivElement;
   private readonly lines: () => string[];
+  readonly toggleButton: HTMLButtonElement;
   private lastUpdate = 0;
   visible: boolean;
 
@@ -42,6 +43,7 @@ export class Hud {
     toggle.className = 'hud-toggle';
     toggle.textContent = 'HUD';
     toggle.onclick = () => this.setVisible(!this.visible);
+    this.toggleButton = toggle;
 
     this.panel = document.createElement('div');
     this.panel.className = 'hud';

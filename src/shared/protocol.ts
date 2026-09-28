@@ -4,9 +4,11 @@ import type { Params } from '../config/params.ts';
 export type Vec3 = [number, number, number];
 export type Quat = [number, number, number, number];
 
+export type VolumeKind = 'static' | 'dynamic' | 'kinematic';
+
 export interface VolumeInfo {
   id: number;
-  kind: 'static' | 'dynamic';
+  kind: VolumeKind;
   /** Transform slot for dynamic volumes; -1 for static ones. */
   slot: number;
   /** Size in voxels. */
@@ -14,6 +16,21 @@ export interface VolumeInfo {
   /** World transform of the volume's voxel-grid origin. */
   position: Vec3;
   rotation: Quat;
+  castShadow: boolean;
+}
+
+/**
+ * Large, cheap terrain: solid ground slabs (colliders + rendered tops) textured by a nearest-sampled
+ * color map over a world rectangle. Areas not covered by a slab are holes (canals, pits).
+ */
+export interface GroundDesc {
+  x0: number;
+  z0: number;
+  x1: number;
+  z1: number;
+  map: { width: number; height: number; data: Uint8Array };
+  slabs: { x0: number; z0: number; x1: number; z1: number; y: number; depth?: number }[];
+  water?: { x0: number; z0: number; x1: number; z1: number; y: number }[];
 }
 
 export interface SimStats {
@@ -49,7 +66,8 @@ export type MainToSim =
   | { type: 'blast'; id: number; origin: Vec3; dir?: Vec3; radius?: number; power?: number }
   | { type: 'spawnCrate'; origin: Vec3; dir: Vec3 }
   | { type: 'settings'; settings: Partial<SimSettings> }
-  | { type: 'pause'; paused: boolean };
+  | { type: 'pause'; paused: boolean }
+  | { type: 'game'; data: unknown };
 
 export interface SimSettings {
   gravity: number;
@@ -69,6 +87,8 @@ export type SimToMain =
   | { type: 'particles'; data: Float32Array }
   | { type: 'blastDone'; id: number; newBodies: number; removedVoxels: number }
   | { type: 'status'; text: string }
+  | { type: 'ground'; ground: GroundDesc }
+  | { type: 'game'; data: unknown }
   | { type: 'error'; message: string; stack?: string };
 
 export interface MeshJob {

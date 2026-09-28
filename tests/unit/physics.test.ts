@@ -100,7 +100,7 @@ describe('physics (Node + Rapier)', () => {
     const before = world.dynamicCount();
     const voxelsBefore = sv.volume.voxelCount;
 
-    const r = carve(world, [3.2, 1.5, 3.2], 0.5, 5);
+    const r = carve(world, { kind: 'sphere', center: [3.2, 1.5, 3.2], radius: 0.5 }, 5);
     expect(r.removedVoxels).toBeGreaterThan(0);
     expect(r.newBodies).toBeGreaterThanOrEqual(1);
     expect(world.dynamicCount()).toBeGreaterThan(before);
@@ -121,7 +121,7 @@ describe('physics (Node + Rapier)', () => {
     g.fillBox(10, 1, 10, 11, 15, 11, wood); // thin post
     world.addVolume('static', g, [0, 0, 0], [0, 0, 0, 1], 'scene');
     world.settings.particleThreshold = 4;
-    const r = carve(world, [1.05, 0.25, 1.05], 0.3, 10); // cuts the post near its base
+    const r = carve(world, { kind: 'sphere', center: [1.05, 0.25, 1.05], radius: 0.3 }, 10); // cuts the post near its base
     expect(g.get(10, 0, 10)).toBe(bedrock);
     expect(r.newBodies).toBe(1); // the rest of the post (> 4 voxels) falls as a body
     blast(world, [0.55, 0.05, 0.55], undefined, 1, 100); // point-blank on bedrock
@@ -137,7 +137,7 @@ describe('physics (Node + Rapier)', () => {
     beam.fillBox(0, 0, 0, 30, 3, 3, wood);
     world.addVolume('dynamic', beam, [0, 5, 0], [0, 0, 0, 1], 'scene');
     const before = world.dynamicCount();
-    const r = carve(world, [1.5, 5.15, 0.15], 0.35, 5); // cut the middle of the beam
+    const r = carve(world, { kind: 'sphere', center: [1.5, 5.15, 0.15], radius: 0.35 }, 5); // cut the middle of the beam
     expect(r.newBodies).toBe(1);
     expect(world.dynamicCount()).toBe(before + 1);
   });
