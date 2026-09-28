@@ -2,9 +2,9 @@
 
 export type RendererPref = 'auto' | 'webgpu' | 'webgl';
 export type QualityName = 'low' | 'medium' | 'high';
-export type SceneName = 'test' | 'city' | 'stress';
+export type SceneName = 'test' | 'city' | 'stress' | 'gallery' | 'cinder' | 'quarry';
 
-export const SCENE_NAMES: readonly SceneName[] = ['test', 'city', 'stress'];
+export const SCENE_NAMES: readonly SceneName[] = ['test', 'city', 'stress', 'gallery', 'cinder', 'quarry'];
 export const QUALITY_NAMES: readonly QualityName[] = ['low', 'medium', 'high'];
 
 export interface Params {
