@@ -25,7 +25,7 @@ describe('parseParams', () => {
     const p = parseParams('?renderer=vulkan&quality=ultra&scene=moon&maxBodies=-5&debug=0');
     expect(p.renderer).toBe('auto');
     expect(p.quality).toBeNull();
-    expect(p.scene).toBe('test');
+    expect(p.scene).toBe(DEFAULT_PARAMS.scene);
     expect(p.maxBodies).toBe(1);
     expect(p.debug).toBe(false);
   });

@@ -235,6 +235,10 @@ export type ClientMessage =
   | { t: 'fastForward'; on: boolean }
   /** End the mission now (only after the path is clear) and show results. */
   | { t: 'finish' }
+  /** Ask for LevelStatic again (client attached late). */
+  | { t: 'hello' }
+  /** Drift assist on/off. */
+  | { t: 'assist'; on: boolean }
   /** Test hooks. */
   | { t: 'debug'; cmd: 'clearLane' | 'teleport' | 'win' | 'fail'; arg?: number[] };
 

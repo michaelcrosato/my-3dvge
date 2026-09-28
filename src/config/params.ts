@@ -24,7 +24,7 @@ export interface Params {
 export const DEFAULT_PARAMS: Params = {
   renderer: 'auto',
   quality: null,
-  scene: 'test',
+  scene: 'cinder',
   maxBodies: 150,
   bench: false,
   benchTime: 300,

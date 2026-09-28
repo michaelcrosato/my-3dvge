@@ -591,6 +591,10 @@ export class PathbreakersGame {
         this.world.removeVolume(m.sv.id);
         this.missiles.splice(i, 1);
         this.world.detonate(at, 1.7, 3.2);
+        if (hit?.body !== null && hit?.body !== undefined) {
+          const sv = this.world.volumeForBody(hit.body);
+          if (sv) this.world.structures.damage(sv.id, 2500);
+        }
         continue;
       }
       m.pos = add(m.pos, step);

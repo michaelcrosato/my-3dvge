@@ -205,6 +205,8 @@ const SPECS: Record<'dozer' | 'truck' | 'buggy' | 'bike', WheeledSpec> = {
 export class WheeledVehicle extends Vehicle {
   readonly spec: WheeledSpec;
   readonly handle: number;
+  /** Throttle requested this step (after mapping). */
+  protected throttle = 0;
   protected contacts: boolean[] = [];
   protected airTime = 0;
   protected sinceLanding = 10;
@@ -282,6 +284,7 @@ export class WheeledVehicle extends Vehicle {
     const physics = this.world.physics!;
     const s = this.spec;
     const { throttle, steer, handbrake } = this.intentToControls(intent);
+    this.throttle = throttle;
     const speed = this.speed();
     this.steerState += (steer - this.steerState) * Math.min(1, dt * 8);
     const steerAngle = this.steerState * s.steer * (1 - 0.5 * Math.min(1, Math.abs(speed) / s.maxSpeed));
@@ -350,14 +353,18 @@ export class Dozer extends WheeledVehicle {
     super.afterStep(dt);
     this.activity = null;
     const speed = this.speed();
-    if (speed > 1.8 && (this.tick++ % 3 === 0)) {
+    this.tick++;
+    // Ramming at speed bites hard; pushing against a wall at full throttle grinds through slowly.
+    const ramming = speed > 1.2 && this.tick % 2 === 0;
+    const grinding = !ramming && this.throttle > 0.4 && this.tick % 7 === 0;
+    if (ramming || grinding) {
       const [w] = this.size;
-      const removed = this.wreckBox([w / 2, 0.95, -0.25], [1.55, 0.8, 0.45], 2.2, 1.6);
+      const removed = this.wreckBox([w / 2, 0.95, -0.3], [1.55, 0.8, grinding ? 0.55 : 0.5], 2.2, ramming ? 4 + speed * 0.4 : 2);
       if (removed > 0) {
         this.activity = 'ramming';
         const physics = this.world.physics!;
         const v = physics.linvel(this.sv.body);
-        const f = Math.max(0.4, 1 - removed / 2500);
+        const f = Math.max(0.55, 1 - removed / 3000);
         physics.setLinvel(this.sv.body, [v[0] * f, v[1], v[2] * f]);
       }
     }
@@ -402,8 +409,8 @@ export class Truck extends WheeledVehicle {
     const back = quatRotate(pose.rot, [0, 0, 1]);
     const lateral = Math.abs(rearVel[0] * right[0] + rearVel[2] * right[2]);
     const backward = rearVel[0] * back[0] + rearVel[2] * back[2];
-    if ((this.sliding && lateral > 2.2) || backward > 5 || (this.airTime > 0.3 && length(v) > 7)) {
-      const removed = this.wreckBox(rearLocal, [1.45, 1.0, 0.55], 3.3, 3, pose);
+    if ((this.sliding && lateral > 2.2) || backward > 3.5 || (this.airTime > 0.3 && length(v) > 7)) {
+      const removed = this.wreckBox(rearLocal, [1.45, 1.0, 0.6], 3.3, 7, pose);
       if (removed > 0) physics.setLinvel(this.sv.body, scale(v, Math.max(0.55, 1 - removed / 4000)));
     } else if (this.sliding) {
       this.zone = { center: rearWorld, half: [1.45, 1.0, 0.55], yaw: yawOf(pose.rot) };
@@ -443,7 +450,7 @@ export class Buggy extends WheeledVehicle {
     this.activity = this.airTime > 0.2 ? 'airborne' : this.turbo > 0 ? 'turbo' : null;
     if (fast && (this.airTime > 0.2 || this.sinceLanding < 0.3)) {
       const [w, h, l] = this.size;
-      const removed = this.wreckBox([w / 2, h / 2, l / 2], [w / 2 + 0.25, h / 2 + 0.25, l / 2 + 0.3], 3, 2.6);
+      const removed = this.wreckBox([w / 2, h / 2, l / 2], [w / 2 + 0.3, h / 2 + 0.3, l / 2 + 0.35], 3, 6);
       if (removed > 0) this.world.physics!.setLinvel(this.sv.body, scale(v, Math.max(0.5, 1 - removed / 2500)));
     }
   }
@@ -591,7 +598,7 @@ export class Mech extends Vehicle {
         const world = this.world;
         const filter = (sv: SimVolume) => this.hooks.canWreck(sv) && sv.kind !== 'kinematic';
         const r = carve(world, { kind: 'sphere', center: feet, radius: 2.4 }, 4.6, { filter, shockwave: true, particleChance: 0.15 });
-        for (const [id, n] of r.perVolume) world.structures.damage(id, n * 2.2);
+        for (const [id, n] of r.perVolume) world.structures.damage(id, n * 5);
         world.emitSmoke(feet, 12, 2);
         this.hooks.onEvent({ e: 'stomp', x: feet[0], y: feet[1], z: feet[2] });
         if (r.removedVoxels > 0) this.hooks.onHit(this, r.perVolume, feet, r.removedVoxels);
