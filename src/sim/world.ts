@@ -14,7 +14,10 @@ import { VoxelVolume } from '../voxel/volume.ts';
 import type { MeshSink } from './mesh-dispatch.ts';
 import type { BoxShape, PhysicsBackend } from './physics/backend.ts';
 import { IDLE_INPUT, Player } from './player.ts';
+import { blast } from './destruction.ts';
 import type { SceneContext } from './scene-api.ts';
+import { voxAsset } from './vox-asset.ts';
+import { readVox } from '../voxel/vox.ts';
 
 export type VolumeTag = 'scene' | 'crate' | 'debris';
 
@@ -48,6 +51,7 @@ export interface SimVolume {
 export interface SimEvents {
   volumeAdded(info: VolumeInfo): void;
   volumeRemoved(id: number): void;
+  status?(text: string): void;
 }
 
 export const DEFAULT_SETTINGS: SimSettings = {
@@ -73,6 +77,9 @@ export class SimWorld {
   time = 0;
   player: Player | null = null;
   input: PlayerInput = IDLE_INPUT;
+  /** Game rules hook (SceneDef.update bound to a context), run after each physics step. */
+  sceneUpdate: ((dt: number) => void) | null = null;
+  private context: SceneContext | null = null;
   private readonly sink: MeshSink | null;
   private readonly events: SimEvents;
   private readonly bodyToVolume = new Map<number, SimVolume>();
@@ -107,6 +114,11 @@ export class SimWorld {
   }
 
   sceneContext(): SceneContext {
+    this.context ??= this.createContext();
+    return this.context;
+  }
+
+  private createContext(): SceneContext {
     return {
       params: this.params,
       palette: this.palette,
@@ -120,6 +132,17 @@ export class SimWorld {
       setBlastTarget: (position) => {
         this.blastTarget = position;
       },
+      loadVox: async (url, defaultMaterial) => {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`loadVox ${url}: HTTP ${res.status}`);
+        return voxAsset(readVox(await res.arrayBuffer()), this.palette, defaultMaterial);
+      },
+      blast: (center, radius, power) => blast(this, center, undefined, radius, power).newBodies,
+      spawnCrate: (origin, dir) => this.spawnCrate(origin, dir).id,
+      setStatus: (text) => this.events.status?.(text),
+      dynamicBodyCount: () => this.dynamicCount(),
+      time: () => this.time,
+      playerPosition: () => (this.player ? [...this.player.position] : null),
     };
   }
 
@@ -290,6 +313,7 @@ export class SimWorld {
     if (this.physics) {
       this.player?.update(dt, this.input);
       this.physics.step(dt);
+      this.sceneUpdate?.(dt);
       this.manageBodies();
       this.enforceBudget();
     }

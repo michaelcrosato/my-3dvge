@@ -34,6 +34,13 @@ export class Palette {
     return out;
   }
 
+  /** Returns an existing entry with this exact color and material, or adds one. */
+  findOrAdd(color: number, material: MaterialName): number {
+    const id = materialByName(material).id;
+    for (let i = 1; i < this.next; i++) if (this.materials[i] === id && this.color(i) === (color & 0xffffff)) return i;
+    return this.add(color, material);
+  }
+
   set(index: number, color: number, material: MaterialName | number): void {
     const o = index * 4;
     this.colors[o] = (color >> 16) & 255;

@@ -8,6 +8,10 @@ export interface EngineDebugHandle {
   stats(): Record<string, unknown>;
   /** Blast at a world position (default: the scene's blast target). Resolves to the dynamic body count delta. */
   triggerBlast(pos?: [number, number, number], radius?: number, power?: number): Promise<number>;
+  /** Starts the scripted benchmark (seconds, default ?benchTime or 300). */
+  startBench(seconds?: number): void;
+  /** Result of the last finished benchmark. */
+  readonly benchReport: unknown;
 }
 
 declare global {

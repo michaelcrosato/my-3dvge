@@ -56,6 +56,31 @@ test('triggerBlast breaks the pillar and creates new bodies', async ({ page, bas
   expect(errors).toEqual([]);
 });
 
+for (const scene of ['city', 'stress']) {
+  test(`${scene} scene loads (.vox assets / many bodies) without errors`, async ({ page, baseURL }) => {
+    const errors = trackErrors(page, new URL(baseURL!).origin);
+    await page.goto(`/?scene=${scene}&quality=low`);
+    await page.waitForFunction(() => window.__engine?.ready === true && window.__engine.bodyCount > 0, undefined, { timeout: 60_000 });
+    await page.waitForFunction(() => Number(window.__engine!.stats().chunkMeshes ?? 0) > 20, undefined, { timeout: 30_000 });
+    expect(await window_blast(page)).toBeGreaterThanOrEqual(0);
+    expect(errors).toEqual([]);
+  });
+}
+
+test('bench mode runs and reports percentiles', async ({ page }) => {
+  await page.goto('/?scene=test&quality=low&bench=1&benchTime=6');
+  await page.waitForFunction(() => window.__engine?.benchReport != null, undefined, { timeout: 60_000 });
+  const report = (await page.evaluate(() => window.__engine!.benchReport)) as { frames: number; frameMs: { p50: number; p99: number }; peakBodies: number };
+  expect(report.frames).toBeGreaterThan(30);
+  expect(report.frameMs.p99).toBeGreaterThanOrEqual(report.frameMs.p50);
+  expect(report.peakBodies).toBeGreaterThan(0);
+  await expect(page.locator('.bench-report')).toBeVisible();
+});
+
+async function window_blast(page: Page): Promise<number> {
+  return page.evaluate(() => window.__engine!.triggerBlast());
+}
+
 test('forced WebGL2 fallback renders', async ({ page, baseURL }) => {
   const errors = trackErrors(page, new URL(baseURL!).origin);
   await page.goto('/?scene=test&quality=low&renderer=webgl');

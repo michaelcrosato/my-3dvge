@@ -15,8 +15,17 @@ npm test               # Vitest unit + physics tests
 npm run build          # production build → dist/
 npm run preview        # serve dist/ with the same headers as Vercel
 npm run test:e2e       # Playwright smoke test (local preview; set BASE_URL to test a deployment)
-npm run gen:assets     # regenerate procedural .vox assets (M4+)
+npm run gen:assets     # regenerate procedural .vox assets → public/vox (node runs the .ts directly)
 ```
+
+## Layout
+
+- `src/app` main-thread engine (loop, input → worker, interpolation, bench) · `src/render` three.js
+  (world view, particles, environment, dynamic resolution) · `src/debug` HUD/overlay/diagnostics/lil-gui
+- `src/sim` simulation worker: `world.ts` (volumes, bodies, colliders, budget), `destruction.ts`,
+  `player.ts`, `physics/` (PhysicsBackend + Rapier), `scenes/` (**games live here**, see docs/ENGINE.md)
+- `src/voxel` pure logic: volume/chunks, mesher (+AO), box merging, flood fill, .vox, palette/materials
+- `src/mesher` mesher worker · `src/shared` protocol + SharedArrayBuffer transform ring
 
 ## Conventions
 

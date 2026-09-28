@@ -11,10 +11,12 @@ import { createTuningPanel } from '../debug/tuning-panel.ts';
 import { Controls, type Action } from '../input/controls.ts';
 import { Environment } from '../render/environment.ts';
 import { Particles } from '../render/particles.ts';
+import { DynamicResolution } from '../render/dynamic-resolution.ts';
 import { createRenderer, type BackendName } from '../render/renderer.ts';
 import { WorldView } from '../render/world-view.ts';
 import type { PlayerInput, SimSettings, SimStats, SimToMain, Vec3 } from '../shared/protocol.ts';
 import { MAX_SLOTS, PLAYER_SLOT, TransformReader, interpolateSlot, transformBufferBytes } from '../shared/transforms.ts';
+import { Bench, type BenchReport } from './bench.ts';
 import { installDebugHandle } from './debug-handle.ts';
 import { SimHost } from './sim-host.ts';
 
@@ -22,6 +24,8 @@ import { SimHost } from './sim-host.ts';
 const EYE_OFFSET = 0.7;
 /** Main-thread time budget per frame for uploading new chunk meshes. */
 const MESH_UPLOAD_BUDGET_MS = 3;
+/** Render cap: high-refresh phones (120 Hz) would otherwise burn twice the power for no gameplay gain. */
+const TARGET_FPS = 60;
 
 /** Main-thread engine: renderer, input, camera, the world mirror and debug tooling. */
 export class Engine {
@@ -48,6 +52,9 @@ export class Engine {
   blastTarget: Vec3 = [0, 1, 0];
   fly: boolean;
   settings: SimSettings | null = null;
+  readonly dynRes: DynamicResolution;
+  bench: Bench | null = null;
+  benchReport: BenchReport | null = null;
 
   private readonly pendingBlasts = new Map<number, (newBodies: number) => void>();
   private nextBlastId = 1;
@@ -57,6 +64,9 @@ export class Engine {
   private readonly playerPos = new THREE.Vector3();
   private readonly tmpQuat = new THREE.Quaternion();
   private lastFrame = 0;
+  private lastRaf = 0;
+  private rafEma = 1000 / 60;
+  private readonly statusEl: HTMLDivElement;
   private drawCalls = 0;
   private triangles = 0;
 
@@ -79,6 +89,12 @@ export class Engine {
     crosshair.className = 'crosshair';
     ui.append(crosshair);
     this.addTouchButtons();
+    this.statusEl = document.createElement('div');
+    this.statusEl.className = 'status';
+    this.statusEl.hidden = true;
+    ui.append(this.statusEl);
+    const base = Math.min(window.devicePixelRatio || 1, q.maxPixelRatio);
+    this.dynRes = new DynamicResolution(base, Math.min(base, q.minPixelRatio), TARGET_FPS);
 
     this.hud = new Hud(ui, () => this.hudLines(), params.debug);
     this.hud.addAction({
@@ -93,6 +109,10 @@ export class Engine {
       run: () => {
         if (this.tuning) this.tuning.hidden = !this.tuning.hidden;
       },
+    });
+    this.hud.addAction({
+      label: 'Bench',
+      run: () => this.startBench(this.params.benchTime),
     });
     this.hud.addAction({
       label: `Quality: ${q.name}`,
@@ -150,6 +170,11 @@ export class Engine {
           this.host.send({ type: 'settings', settings: patch });
         }).domElement.parentElement;
         if (this.tuning) this.tuning.hidden = !this.params.debug;
+        if (this.params.bench) setTimeout(() => this.startBench(this.params.benchTime), 1500);
+        break;
+      case 'status':
+        this.statusEl.textContent = msg.text;
+        this.statusEl.hidden = msg.text === '';
         break;
       case 'particles':
         this.particles.spawn(msg.data);
@@ -192,13 +217,17 @@ export class Engine {
       },
       stats: () => this.statsSnapshot(),
       triggerBlast: (pos, radius, power) => this.blastAt(pos ?? this.blastTarget, undefined, radius, power),
+      startBench: (seconds) => this.startBench(seconds ?? this.params.benchTime),
+      get benchReport() {
+        return engine.benchReport;
+      },
     });
   }
 
   private resize(): void {
     const w = window.innerWidth;
     const h = window.innerHeight;
-    this.pixelRatio = Math.min(window.devicePixelRatio || 1, this.quality.maxPixelRatio);
+    this.pixelRatio = this.dynRes ? this.dynRes.ratio : Math.min(window.devicePixelRatio || 1, this.quality.maxPixelRatio);
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
@@ -266,9 +295,73 @@ export class Engine {
     this.camera.rotation.set(this.controls.pitch, this.controls.yaw, 0);
   }
 
+  startBench(seconds: number): void {
+    if (this.bench && !this.bench.done) return;
+    this.benchReport = null;
+    this.bench = new Bench(seconds, this.blastTarget, {
+      setCamera: (p, yaw, pitch) => {
+        this.fly = true;
+        this.flyPos.set(p[0], p[1], p[2]);
+        this.controls.yaw = yaw;
+        this.controls.pitch = pitch;
+      },
+      blast: (o, d) => void this.blastAt(o, d),
+      crate: (o, d) => this.host.send({ type: 'spawnCrate', origin: o, dir: d }),
+      bodyCount: () => this.simStats?.dynamicBodies ?? 0,
+    });
+  }
+
+  private showBenchReport(report: BenchReport): void {
+    this.benchReport = report;
+    const full = {
+      report,
+      build: BUILD_INFO,
+      renderer: this.backend,
+      quality: this.quality.name,
+      scene: this.params.scene,
+      maxBodies: this.params.maxBodies,
+      pixelRatioEnd: this.dynRes.ratio,
+      userAgent: navigator.userAgent,
+    };
+    const text = JSON.stringify(full, null, 2);
+    const dlg = document.createElement('div');
+    dlg.className = 'modal bench-report';
+    const f = report.frameMs;
+    const pre = document.createElement('pre');
+    pre.textContent =
+      `Bench ${report.seconds.toFixed(0)} s, ${report.frames} frames\n` +
+      `frame ms  p50 ${f.p50.toFixed(2)}  p95 ${f.p95.toFixed(2)}  p99 ${f.p99.toFixed(2)}  avg ${f.avg.toFixed(2)}\n` +
+      `first ${report.windowSeconds.toFixed(0)} s avg ${report.firstWindowAvgMs.toFixed(2)} ms → last ${report.windowSeconds.toFixed(0)} s avg ${report.lastWindowAvgMs.toFixed(2)} ms\n` +
+      `peak bodies ${report.peakBodies}  blasts ${report.blasts}  crates ${report.crates}\n\n${text}`;
+    const copy = document.createElement('button');
+    copy.textContent = 'Copy report';
+    copy.onclick = async () => {
+      copy.textContent = (await copyText(text)) ? 'Copied ✓' : 'Copy failed';
+    };
+    const close = document.createElement('button');
+    close.textContent = 'Close';
+    close.onclick = () => dlg.remove();
+    dlg.append(pre, copy, close);
+    this.ui.append(dlg);
+  }
+
   private frame(time: number): void {
-    const dt = Math.min(0.1, (time - this.lastFrame) / 1000);
-    if (this.framesRendered > 0) this.frameStats.push(time - this.lastFrame);
+    // Cap at TARGET_FPS on high-refresh displays: skip a vsync when rendering now would overshoot.
+    const raw = time - this.lastRaf;
+    this.lastRaf = time;
+    if (raw > 0 && raw < 100) this.rafEma += (raw - this.rafEma) * 0.1;
+    if (this.framesRendered > 0 && time - this.lastFrame < 1000 / TARGET_FPS - this.rafEma * 0.6) return;
+
+    const frameMs = time - this.lastFrame;
+    const dt = Math.min(0.1, frameMs / 1000);
+    if (this.framesRendered > 0) {
+      this.frameStats.push(frameMs);
+      if (this.dynRes.update(frameMs, time)) this.resize();
+      if (this.bench) {
+        const report = this.bench.frame(time, frameMs);
+        if (report) this.showBenchReport(report);
+      }
+    }
     this.lastFrame = time;
 
     this.world.processQueue(MESH_UPLOAD_BUDGET_MS);
@@ -299,6 +392,8 @@ export class Engine {
       sharedTransforms: this.sharedTransforms,
       mode: this.fly ? 'fly' : 'walk',
       particles: this.particles.alive,
+      dynamicResolution: this.dynRes.scale,
+      bench: this.bench ? { elapsed: this.bench.elapsed, seconds: this.bench.seconds, done: this.bench.done } : null,
       camera: this.camera.position.toArray().map((v) => Math.round(v * 100) / 100),
       sim: this.simStats,
     };
@@ -327,7 +422,8 @@ export class Engine {
       `FPS ${avg > 0 ? (1000 / avg).toFixed(0) : '--'}  frame ${avg.toFixed(1)}ms  p95 ${s.p95.toFixed(1)}  sim ${sim ? `${sim.stepMs.toFixed(2)}ms (max ${sim.stepMsMax.toFixed(1)})` : '--'}`,
       `bodies ${sim?.bodiesActive ?? 0} active / ${sim?.bodiesSleeping ?? 0} sleeping (${sim?.dynamicBodies ?? 0}/${this.params.maxBodies})  colliders ${k(sim?.colliders ?? 0)}  voxels ${k(sim?.voxels ?? 0)}`,
       `draw ${this.drawCalls}  tris ${k(this.triangles)}  chunks ${this.world.chunkMeshes}  queue ${this.world.queued}/${sim?.meshJobs ?? 0}  particles ${this.particles.alive}`,
-      `${this.backend}  COI ${window.crossOriginIsolated ? 'yes' : 'NO'} (${this.sharedTransforms ? 'SAB' : 'postMessage'})  quality ${this.quality.name}  px ${this.pixelRatio.toFixed(2)}  ${this.fly ? 'fly' : 'walk'}`,
+      `${this.backend}  COI ${window.crossOriginIsolated ? 'yes' : 'NO'} (${this.sharedTransforms ? 'SAB' : 'postMessage'})  quality ${this.quality.name}  px ${this.pixelRatio.toFixed(2)} (dynres ×${this.dynRes.scale.toFixed(2)})  ${this.fly ? 'fly' : 'walk'}`,
+      ...(this.bench && !this.bench.done ? [`BENCH ${this.bench.elapsed.toFixed(0)}/${this.bench.seconds}s`] : []),
       `build ${BUILD_INFO.shortSha}  ${BUILD_INFO.time.replace('T', ' ').slice(0, 16)}Z`,
     ];
   }

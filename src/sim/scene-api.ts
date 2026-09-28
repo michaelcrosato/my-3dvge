@@ -5,7 +5,9 @@
 import type { Params } from '../config/params.ts';
 import type { Quat, Vec3 } from '../shared/protocol.ts';
 import type { Palette } from '../voxel/palette.ts';
+import type { MaterialName } from '../voxel/materials.ts';
 import type { VoxelVolume } from '../voxel/volume.ts';
+import type { VoxAsset } from './vox-asset.ts';
 
 export interface SceneContext {
   readonly params: Params;
@@ -25,10 +27,28 @@ export interface SceneContext {
   setSpawn(position: Vec3, yaw?: number): void;
   /** Default target for window.__engine.triggerBlast() and bench mode. */
   setBlastTarget(position: Vec3): void;
+  /** Fetches and parses a MagicaVoxel file (e.g. '/vox/crate.vox'), binding its colors to the palette. */
+  loadVox(url: string, defaultMaterial?: MaterialName): Promise<VoxAsset>;
+
+  // ---- game-rule helpers (usable from build() and update()) ----
+  /** Carves a sphere (m) at a world position; returns how many new bodies broke off. */
+  blast(center: Vec3, radius?: number, power?: number): number;
+  /** Throws a crate from `origin` along `dir`; returns its volume id. */
+  spawnCrate(origin: Vec3, dir: Vec3): number;
+  /** Shows a line of game text at the top of the screen ('' hides it). */
+  setStatus(text: string): void;
+  dynamicBodyCount(): number;
+  /** Seconds of simulated time. */
+  time(): number;
+  /** Player capsule center, or null before the player spawns. */
+  playerPosition(): Vec3 | null;
 }
 
 export interface SceneDef {
   name: string;
   description: string;
-  build(ctx: SceneContext): void;
+  /** Builds the level. May be async (e.g. to load .vox assets). */
+  build(ctx: SceneContext): void | Promise<void>;
+  /** Optional game rules, called every fixed 60 Hz step after physics. */
+  update?(ctx: SceneContext, dt: number): void;
 }
