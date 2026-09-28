@@ -36,7 +36,7 @@ const RANK = { bronze: 1, silver: 2, gold: 3, platinum: 4 } as const;
 export function recordResults(s: SaveData, r: MissionResults): boolean {
   const key = `${r.level}:${r.mode}` as `${LevelId}:${ModeId}`;
   const prev = s.best[key];
-  const completion = (r.buildings[0] / Math.max(1, r.buildings[1]) + r.rdus[0] / Math.max(1, r.rdus[1]) + r.survivors[0] / Math.max(1, r.survivors[1]) + r.dishes[0] / Math.max(1, r.dishes[1])) / 4;
+  const completion = Math.round(((r.buildings[0] / Math.max(1, r.buildings[1]) + r.rdus[0] / Math.max(1, r.rdus[1]) + r.survivors[0] / Math.max(1, r.survivors[1]) + r.dishes[0] / Math.max(1, r.dishes[1])) / 4) * 100);
   const better = <T extends keyof typeof RANK>(a: T | undefined, b: T | undefined) => (a && (!b || RANK[a] > RANK[b]) ? a : b);
   const newRecord = !prev || r.time < prev.time;
   s.best[key] = {

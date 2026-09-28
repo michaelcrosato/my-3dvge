@@ -206,13 +206,13 @@ class PathbreakersClient implements GameClient {
     c.addTouchButton('JUMP', { hold: 'jump', className: 'pb-jump' });
     c.addTouchButton('ENTER', { action: 'enter', className: 'pb-enter' });
     c.addTouchButton('CAM', { action: 'cam', className: 'pb-cam' });
+    c.addTouchButton('RESET', { action: 'reset', className: 'pb-reset' });
     const top = document.createElement('div');
     top.className = 'touch-top';
     top.hidden = !c.isTouch;
     this.engine.ui.append(top);
     c.addTouchButton('❚❚', { action: 'pause', className: 'pb-pause', parent: top });
     c.addTouchButton('CARRIER', { hold: 'carrierCam', className: 'pb-carrier', parent: top });
-    c.addTouchButton('RESET', { action: 'reset', className: 'pb-reset', parent: top });
   }
 
   // ---------------------------------------------------------------- engine callbacks
@@ -362,13 +362,14 @@ class PathbreakersClient implements GameClient {
       }
       case 'results': {
         const r: MissionResults = e.results;
+        const before = JSON.parse(JSON.stringify(this.save)) as SaveData;
         recordResults(this.save, r);
         this.flow = 'results';
         this.audio.setAlarm(0);
         this.audio.setEngine(null, 0, 0);
         this.audio.setMusic('results', 0);
         if (r.medals.carrier || r.medals.completion || r.medals.time) sfx('medal');
-        this.screenAfter = { at: this.flowTimer + 1.8, show: () => this.ui.showResults(r, this.save) };
+        this.screenAfter = { at: this.flowTimer + 1.8, show: () => this.ui.showResults(r, before) };
         break;
       }
       default:

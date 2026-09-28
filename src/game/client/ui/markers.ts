@@ -182,7 +182,10 @@ export class Markers {
       dy = -dy;
       if (Math.abs(dy) < 1) dy = vh; // behind the camera: point down
     }
-    const k = Math.min((vw / 2 - EDGE) / Math.max(1e-3, Math.abs(dx)), (vh / 2 - EDGE) / Math.max(1e-3, Math.abs(dy)));
+    // Keep edge indicators clear of the top HUD and the bottom vehicle panel / touch buttons.
+    const topRoom = vh / 2 - Math.min(vh / 2 - EDGE, 120);
+    const bottomRoom = vh / 2 - Math.min(vh / 2 - EDGE, 170);
+    const k = Math.min((vw / 2 - EDGE) / Math.max(1e-3, Math.abs(dx)), (dy < 0 ? topRoom : bottomRoom) / Math.max(1e-3, Math.abs(dy)));
     const ex = vw / 2 + dx * k, ey = vh / 2 + dy * k;
     const ang = Math.atan2(dy, dx) * (180 / Math.PI) - 90;
     const len = Math.hypot(dx, dy) || 1;
