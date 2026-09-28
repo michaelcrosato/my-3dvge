@@ -282,7 +282,7 @@ export class PathbreakersGame {
     }
     for (const m of this.structs.values()) if (m.info.survivor) this.survivors.push({ pos: [m.info.x, 0, m.info.z], state: 'hidden', structure: m.info.id });
     this.world.structures.onCollapse((s) => this.onCollapse(s.volumeId));
-    this.world.on('explosion', (c, r) => this.onExplosion(c, r));
+    this.world.on('explosion', (c, r, p) => this.onExplosion(c, r, p));
     // Walker avatar (the pilot): visual only, follows the walker.
     const pilotModel = this.buildPilot();
     this.pilot = this.world.addVolume('kinematic', pilotModel, [0, -500, 0], [0, 0, 0, 1], 'prop', { collide: false, destructible: false });
@@ -634,7 +634,7 @@ export class PathbreakersGame {
         let credited = false;
         for (const id of r.perVolume.keys()) {
           if (this.structs.has(id)) {
-            this.world.structures.damage(id, 2200);
+            this.world.structures.damage(id, 1200);
             credited = true;
           }
         }
@@ -752,8 +752,15 @@ export class PathbreakersGame {
     }
   }
 
-  private onExplosion(c: Vec3, radius: number): void {
+  private onExplosion(c: Vec3, radius: number, power: number): void {
     this.emit({ e: 'explosion', x: c[0], y: c[1], z: c[2], radius });
+    // Blasts shake whole buildings, not just the voxels they carve.
+    for (const m of [...this.structs.values()]) {
+      if (m.destroyed) continue;
+      const s = m.info;
+      const d = Math.hypot(Math.max(Math.abs(c[0] - s.x) - s.w / 2, 0), Math.max(c[1] - s.h, 0, -c[1]), Math.max(Math.abs(c[2] - s.z) - s.d / 2, 0));
+      if (d < radius) this.world.structures.damage(m.sv.id, 3500 * (power / 4) * (1 - d / radius));
+    }
     const carrier = this.carrier;
     if (carrier && this.mode === 'mission' && (this.state === 'running' || this.state === 'clear') && carrier.sv && this.world.volumes.has(carrier.sv.id)) {
       if (carrier.distanceTo(c) < radius * 0.45) this.fail('The carrier was caught in a blast!');

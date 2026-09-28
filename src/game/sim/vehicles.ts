@@ -233,7 +233,7 @@ const SPECS: Record<'dozer' | 'truck' | 'buggy' | 'bike', WheeledSpec> = {
   truck: {
     mass: 6000, chassisY: [0.5, 2.4], inset: 0.05, comHeight: 0.7,
     wheels: [{ x: -1.0, z: -1.85, r: 0.5, drive: false, steer: 1 }, { x: 1.0, z: -1.85, r: 0.5, drive: false, steer: 1 }, { x: -1.0, z: 1.75, r: 0.5, drive: true, steer: 0 }, { x: 1.0, z: 1.75, r: 0.5, drive: true, steer: 0 }],
-    rest: 0.35, stiffness: 40, engine: 9500, brake: 800, maxSpeed: 15, reverseMax: 6, steer: 0.5, grip: [2.4, 1.1], uprightAssist: 5,
+    rest: 0.35, stiffness: 40, engine: 9500, brake: 800, maxSpeed: 15, reverseMax: 8, steer: 0.5, grip: [2.4, 1.1], uprightAssist: 5,
   },
   buggy: {
     mass: 900, chassisY: [0.38, 1.25], inset: 0.1, comHeight: 0.45,
@@ -461,7 +461,7 @@ export class Truck extends WheeledVehicle {
     const back = quatRotate(pose.rot, [0, 0, 1]);
     const lateral = Math.abs(rearVel[0] * right[0] + rearVel[2] * right[2]);
     const backward = rearVel[0] * back[0] + rearVel[2] * back[2];
-    if ((this.sliding && lateral > 2.2) || backward > 3.5 || (this.airTime > 0.3 && length(v) > 7)) {
+    if ((this.sliding && lateral > 2.2) || backward > 2.5 || (this.airTime > 0.3 && length(v) > 7)) {
       const removed = this.wreckBox(rearLocal, [1.45, 1.15, 0.6], 3.3, 7, pose);
       if (removed > 0) physics.setLinvel(this.sv.body, scale(v, Math.max(0.55, 1 - removed / 4000)));
     } else if (this.sliding) {
