@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#9fb8cf" />
+    <link rel="icon" href="data:," />
+    <title>my-3dvge</title>
+    <script>
+      // Capture errors thrown before the app's error overlay module has loaded.
+      window.__bootErrors = [];
+      window.addEventListener('error', function (e) { window.__bootErrors.push({ message: String(e.message), stack: e.error && e.error.stack }); });
+      window.addEventListener('unhandledrejection', function (e) { window.__bootErrors.push({ message: String(e.reason && e.reason.message || e.reason), stack: e.reason && e.reason.stack }); });
+    </script>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="ui"><div id="loading">Loading…</div></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
