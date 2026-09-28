@@ -116,7 +116,7 @@ describe('FREIGHT HOPPER bridges the rail cut', () => {
     scene.onMessage!(ctx, { t: 'start', mode: 'mission' });
     scene.onMessage!(ctx, { t: 'skipFlyover' });
     run(3.2);
-    world.player!.teleport([-23.2, 0, 24]);
+    world.player!.teleport([-23.2, 0, 12.5]);
     run(0.2);
     scene.onMessage!(ctx, { t: 'input', input: input({ enter: 1 }) });
     run(0.2);

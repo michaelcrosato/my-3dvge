@@ -88,7 +88,8 @@ export class Markers {
     // Warning arrows over blockers (and unfilled gaps the carrier is heading for).
     const live = new Set<number>();
     if (snap && showArrows) {
-      for (const b of snap.blockers) {
+      // Only the three most urgent blockers get floating arrows (the strip and radar show all).
+      for (const b of [...snap.blockers].sort((x, y) => x.eta - y.eta).slice(0, 3)) {
         const s = this.structures.get(b.id);
         if (!s) continue;
         live.add(b.id);

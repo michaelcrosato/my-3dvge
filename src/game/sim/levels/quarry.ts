@@ -9,7 +9,7 @@ export const quarryRumble: LevelDef = {
   tips: ['Use the dirt mounds to launch TAILWHIP into the high targets.', 'HAMMERHEAD stomps anything from above — fly between targets.'],
   bounds: { x0: -70, z0: -70, x1: 70, z1: 70 },
   lane: null,
-  medalTimes: { bronze: 90, silver: 65, gold: 50, platinum: 35 },
+  medalTimes: { bronze: 150, silver: 110, gold: 85, platinum: 60 },
   timeAttackTimes: null,
   radio: {
     start: 'CHIEF: Clock is running. Twelve targets — make it quick!',

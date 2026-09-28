@@ -363,6 +363,9 @@ export class PathbreakersGame {
       this.complete();
     } else if (cmd === 'fail') {
       this.fail('Debug failure.');
+    } else if (cmd === 'collapse' && arg) {
+      const s = this.world.structures.byVolume.get(arg[0] ?? -1);
+      if (s) this.world.structures.collapse(s);
     } else if (cmd === 'teleport' && arg && this.world.player) {
       this.world.player.teleport([arg[0] ?? 0, 0, arg[1] ?? 0]);
     }

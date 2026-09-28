@@ -57,7 +57,7 @@ and switchable cameras, instant restart, collision tested against remaining voxe
   targets against the clock; 1:00 / 0:45 / 0:35 / 0:25.
 - Records and unlocks persist in localStorage.
 
-## Level: Cinder Flats (≈ 360 × 180 m, carrier ≈ 3:00)
+## Level: Cinder Flats (≈ 360 × 180 m, carrier ≈ 3:20)
 Carrier line along +x at z = 0 from x = -165 to the Safe Zone at x = +165 (lane width 3.2 m).
 | x (m) | Obstacle | Intended solution |
 | --- | --- | --- |
@@ -66,7 +66,7 @@ Carrier line along +x at z = 0 from x = -165 to the Safe Zone at x = +165 (lane 
 | -60 | gas station (pumps + canopy) between two shops | ram the pumps → chain explosion |
 | -20 | rail cut (gap) | FREIGHT HOPPER flatbed lined up under the lane |
 | +10 | stone depot (too strong for the dozer) | push TNT from the stack beside it |
-| +40..+55 | three drainage pits | push concrete blocks in |
+| +42, +50 | two drainage pits | push concrete blocks in |
 | +75..+100 | terraced houses on grass, dirt mounds | TAILWHIP slides / SKYLARK jumps |
 | +130 | 8-storey office tower | HAMMERHEAD stomps (hidden in the shed under the water tower; RDU trail) |
 | +165 | Safe Zone + COMMAND RIG | end |

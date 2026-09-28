@@ -240,7 +240,7 @@ export type ClientMessage =
   /** Drift assist on/off. */
   | { t: 'assist'; on: boolean }
   /** Test hooks. */
-  | { t: 'debug'; cmd: 'clearLane' | 'teleport' | 'win' | 'fail'; arg?: number[] };
+  | { t: 'debug'; cmd: 'clearLane' | 'teleport' | 'win' | 'fail' | 'collapse'; arg?: number[] };
 
 export type SimMessage =
   | { k: 'static'; data: LevelStatic }

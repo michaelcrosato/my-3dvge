@@ -36,9 +36,9 @@ export const cinderFlats: LevelDef = {
     'Follow the RDU lights — they lead to secrets.',
   ],
   bounds: { x0: -180, z0: -90, x1: 180, z1: 90 },
-  lane: { x0: -165, x1: 165, z: 0, width: 3.2, speed: 1.85 },
+  lane: { x0: -165, x1: 165, z: 0, width: 3.2, speed: 1.65 },
   medalTimes: null,
-  timeAttackTimes: { bronze: 150, silver: 120, gold: 100, platinum: 60 },
+  timeAttackTimes: { bronze: 210, silver: 170, gold: 140, platinum: 110 },
   radio: {
     start: "CHIEF: Carrier's rolling! Hop in PLOWHORSE and clear that lane, rookie!",
     'enter:dozer': "SPARKS: PLOWHORSE — ram 'em at full speed, blade first!",
@@ -53,7 +53,7 @@ export const cinderFlats: LevelDef = {
     'warn:CORNER SHOP': 'CHIEF: The corner shop is in the way too!',
     'gap:rail': "CHIEF: The lane crosses the rail cut! Get the FREIGHT HOPPER's flatbed under it!",
     'warn:STONE DEPOT': "SPARKS: That depot is solid stone — the dozer won't dent it. Push the TNT in, or try LONGBOW's missiles!",
-    'gap:pit': 'CHIEF: Drainage pits! Shove those concrete blocks in before the carrier drops in!',
+    'gap:pit': 'CHIEF: Drainage pits! Shove those concrete blocks in with the dozer before the carrier drops in!',
     'warn:ROW HOUSE': "SPARKS: Row houses. TAILWHIP's parked just north — swing that tail!",
     'warn:OFFICE TOWER': "CHIEF: That tower's too big for wheels. HAMMERHEAD's by the water tower — follow the lights!",
     fuse: 'SPARKS: Fuse is lit! Get it where it hurts!',
@@ -87,8 +87,8 @@ export const cinderFlats: LevelDef = {
     g.rect(-178, -8, -158, 8, C.concrete, 0.02);
     g.rect(158, -8, 178, 8, C.concrete, 0.02);
     // Rail cut and drainage pits (holes in the ground).
-    g.hole(-22, -86, -18, 86, -1.2);
-    for (const x of [38.2, 45.2, 52.2]) g.hole(x, -2, x + 3.6, 2, -1.2);
+    g.hole(-21.6, -86, -18.4, 86, -1.2);
+    for (const x of [40.2, 48.2]) g.hole(x, -2, x + 3.6, 2, -1.2);
 
     // ---- start and end
     b.prop('safePad', -168, 0, { w: 160, d: 120 });
@@ -128,8 +128,8 @@ export const cinderFlats: LevelDef = {
 
     // ---- rail cut: FREIGHT HOPPER on rails in the cut; bridges far north/south
     for (let z = -80; z < 80; z += 10) b.prop('track', -20, z + 5, { length: 100, y: -1.2, solid: false });
-    b.vehicle('train', -20, 0, 0, { track: { x: -20, y: -1.2, z0: -70, z1: 70 }, s: 20 });
-    b.gap('rail', -22, -18, -1.8, 1.8, () => b.game.vehicles.some((v) => v.kind === 'train' && Math.abs((v as unknown as { deckCenterZ(): number }).deckCenterZ()) <= 0.8));
+    b.vehicle('train', -20, 0, 0, { track: { x: -20, y: -1.2, z0: -70, z1: 70 }, s: 8 });
+    b.gap('rail', -21.6, -18.4, -1.8, 1.8, () => b.game.vehicles.some((v) => v.kind === 'train' && Math.abs((v as unknown as { deckCenterZ(): number }).deckCenterZ()) <= 0.8));
     b.prop('ramp', -20, -78, { w: 60, h: 2, d: 60, y: -0.2 });
     b.prop('ramp', -20, 78, { w: 60, h: 2, d: 60, y: -0.2 });
     b.building('shed', -8, 20, { name: 'SIGNAL BOX', value: 45_000 });
@@ -144,7 +144,7 @@ export const cinderFlats: LevelDef = {
     b.building('warehouse', 24, -26, { name: 'WAREHOUSE', value: 380_000, survivor: true });
 
     // ---- drainage pits and concrete blocks
-    for (const x of [40, 47, 54]) {
+    for (const x of [42, 50]) {
       b.block(x, 9);
       b.gap('pit', x - 1.8, x + 1.8, -2, 2);
     }

@@ -31,7 +31,7 @@ describe('PATHBREAKERS rules', () => {
     const stat = g.msgs.find((m) => m.k === 'static')!.data as LevelStatic;
     expect(stat.structures.filter((s) => s.inLane).map((s) => s.name)).toEqual(expect.arrayContaining(['BARN', 'FARMHOUSE', 'GAS PUMPS', 'CORNER SHOP', 'STONE DEPOT', 'ROW HOUSE', 'OFFICE TOWER']));
     expect(stat.structures.filter((s) => !s.inLane).length).toBeGreaterThan(15);
-    expect(stat.gaps.map((x) => x.kind)).toEqual(['rail', 'pit', 'pit', 'pit']);
+    expect(stat.gaps.map((x) => x.kind)).toEqual(['rail', 'pit', 'pit']);
     expect(stat.totals.rdus).toBe(100);
     expect(stat.totals.dishes).toBe(2);
     expect(stat.totals.survivors).toBe(8);
