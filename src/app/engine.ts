@@ -7,11 +7,13 @@ import { environmentInfo, probeGpu, type GpuInfo } from '../debug/diagnostics.ts
 import { getErrors } from '../debug/error-overlay.ts';
 import { FrameStats } from '../debug/frame-stats.ts';
 import { Hud } from '../debug/hud.ts';
+import { createTuningPanel } from '../debug/tuning-panel.ts';
 import { Controls, type Action } from '../input/controls.ts';
 import { Environment } from '../render/environment.ts';
+import { Particles } from '../render/particles.ts';
 import { createRenderer, type BackendName } from '../render/renderer.ts';
 import { WorldView } from '../render/world-view.ts';
-import type { PlayerInput, SimStats, SimToMain, Vec3 } from '../shared/protocol.ts';
+import type { PlayerInput, SimSettings, SimStats, SimToMain, Vec3 } from '../shared/protocol.ts';
 import { MAX_SLOTS, PLAYER_SLOT, TransformReader, interpolateSlot, transformBufferBytes } from '../shared/transforms.ts';
 import { installDebugHandle } from './debug-handle.ts';
 import { SimHost } from './sim-host.ts';
@@ -31,6 +33,7 @@ export class Engine {
   readonly camera: THREE.PerspectiveCamera;
   readonly frameStats = new FrameStats(3600);
   readonly world = new WorldView();
+  readonly particles = new Particles();
   readonly env: Environment;
   readonly controls: Controls;
   readonly hud: Hud;
@@ -44,7 +47,12 @@ export class Engine {
   simStats: SimStats | null = null;
   blastTarget: Vec3 = [0, 1, 0];
   fly: boolean;
+  settings: SimSettings | null = null;
 
+  private readonly pendingBlasts = new Map<number, (newBodies: number) => void>();
+  private nextBlastId = 1;
+  private tuning: HTMLElement | null = null;
+  private readonly ui: HTMLElement;
   private readonly flyPos = new THREE.Vector3(0, 3, 6);
   private readonly playerPos = new THREE.Vector3();
   private readonly tmpQuat = new THREE.Quaternion();
@@ -63,7 +71,8 @@ export class Engine {
     this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, q.viewDistance);
     this.camera.rotation.order = 'YXZ';
     this.env = new Environment(this.scene, renderer, q);
-    this.scene.add(this.world.root);
+    this.scene.add(this.world.root, this.particles.mesh);
+    this.ui = ui;
 
     this.controls = new Controls(canvas, ui);
     const crosshair = document.createElement('div');
@@ -77,6 +86,12 @@ export class Engine {
       run: async (b) => {
         b.textContent = (await copyText(JSON.stringify(this.diagnostics(), null, 2))) ? 'Copied ✓' : 'Copy failed';
         setTimeout(() => (b.textContent = 'Copy diagnostics'), 1500);
+      },
+    });
+    this.hud.addAction({
+      label: 'Tuning',
+      run: () => {
+        if (this.tuning) this.tuning.hidden = !this.tuning.hidden;
       },
     });
     this.hud.addAction({
@@ -116,9 +131,10 @@ export class Engine {
   }
 
   protected addTouchButtons(): void {
-    this.controls.addTouchButton('Jump', { hold: 'jump' });
     this.controls.addTouchButton('Crate', { action: 'spawn' });
+    this.controls.addTouchButton('Blast', { action: 'blast', className: 'primary' });
     this.controls.addTouchButton('Fly', { action: 'toggleFly' });
+    this.controls.addTouchButton('Jump', { hold: 'jump' });
   }
 
   private onSimMessage(msg: SimToMain): void {
@@ -128,6 +144,19 @@ export class Engine {
         this.blastTarget = msg.blastTarget;
         this.flyPos.set(msg.spawn[0], msg.spawn[1] + 1.6, msg.spawn[2]);
         this.controls.yaw = msg.spawnYaw;
+        this.settings = msg.settings;
+        this.tuning = createTuningPanel(this.ui, msg.settings, this.quality.name, (patch) => {
+          Object.assign(this.settings!, patch);
+          this.host.send({ type: 'settings', settings: patch });
+        }).domElement.parentElement;
+        if (this.tuning) this.tuning.hidden = !this.params.debug;
+        break;
+      case 'particles':
+        this.particles.spawn(msg.data);
+        break;
+      case 'blastDone':
+        this.pendingBlasts.get(msg.id)?.(msg.newBodies);
+        this.pendingBlasts.delete(msg.id);
         break;
       case 'volumeAdded':
         this.world.addVolume(msg.volume);
@@ -162,7 +191,7 @@ export class Engine {
         return engine.backend;
       },
       stats: () => this.statsSnapshot(),
-      triggerBlast: async () => 0,
+      triggerBlast: (pos, radius, power) => this.blastAt(pos ?? this.blastTarget, undefined, radius, power),
     });
   }
 
@@ -183,9 +212,19 @@ export class Engine {
     return [-Math.sin(c.yaw) * cp, Math.sin(c.pitch), -Math.cos(c.yaw) * cp];
   }
 
+  /** Blasts at `origin`, or along `dir` from it (raycast in the worker). Resolves to new body count. */
+  blastAt(origin: Vec3, dir?: Vec3, radius?: number, power?: number): Promise<number> {
+    const id = this.nextBlastId++;
+    return new Promise((resolve) => {
+      this.pendingBlasts.set(id, resolve);
+      this.host.send({ type: 'blast', id, origin, dir, radius, power });
+    });
+  }
+
   protected handleAction(a: Action): void {
     const origin: Vec3 = [this.camera.position.x, this.camera.position.y, this.camera.position.z];
-    if (a === 'spawn') this.host.send({ type: 'spawnCrate', origin, dir: this.viewDir() });
+    if (a === 'blast') void this.blastAt(origin, this.viewDir());
+    else if (a === 'spawn') this.host.send({ type: 'spawnCrate', origin, dir: this.viewDir() });
     else if (a === 'toggleFly') {
       this.fly = !this.fly;
       if (this.fly) this.flyPos.copy(this.camera.position);
@@ -235,6 +274,7 @@ export class Engine {
     this.world.processQueue(MESH_UPLOAD_BUDGET_MS);
     this.updateInput(dt);
     this.applyTransforms();
+    this.particles.update(dt);
     this.env.follow(this.camera.position);
 
     this.renderer.render(this.scene, this.camera);
@@ -258,6 +298,7 @@ export class Engine {
       meshQueue: this.world.queued,
       sharedTransforms: this.sharedTransforms,
       mode: this.fly ? 'fly' : 'walk',
+      particles: this.particles.alive,
       camera: this.camera.position.toArray().map((v) => Math.round(v * 100) / 100),
       sim: this.simStats,
     };
@@ -285,7 +326,7 @@ export class Engine {
     return [
       `FPS ${avg > 0 ? (1000 / avg).toFixed(0) : '--'}  frame ${avg.toFixed(1)}ms  p95 ${s.p95.toFixed(1)}  sim ${sim ? `${sim.stepMs.toFixed(2)}ms (max ${sim.stepMsMax.toFixed(1)})` : '--'}`,
       `bodies ${sim?.bodiesActive ?? 0} active / ${sim?.bodiesSleeping ?? 0} sleeping (${sim?.dynamicBodies ?? 0}/${this.params.maxBodies})  colliders ${k(sim?.colliders ?? 0)}  voxels ${k(sim?.voxels ?? 0)}`,
-      `draw ${this.drawCalls}  tris ${k(this.triangles)}  chunks ${this.world.chunkMeshes}  queue ${this.world.queued}/${sim?.meshJobs ?? 0}`,
+      `draw ${this.drawCalls}  tris ${k(this.triangles)}  chunks ${this.world.chunkMeshes}  queue ${this.world.queued}/${sim?.meshJobs ?? 0}  particles ${this.particles.alive}`,
       `${this.backend}  COI ${window.crossOriginIsolated ? 'yes' : 'NO'} (${this.sharedTransforms ? 'SAB' : 'postMessage'})  quality ${this.quality.name}  px ${this.pixelRatio.toFixed(2)}  ${this.fly ? 'fly' : 'walk'}`,
       `build ${BUILD_INFO.shortSha}  ${BUILD_INFO.time.replace('T', ' ').slice(0, 16)}Z`,
     ];

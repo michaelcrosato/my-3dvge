@@ -212,3 +212,17 @@ body {
   background: rgba(255, 255, 255, 0.85);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
 }
+
+.tuning-panel {
+  position: absolute;
+  top: calc(52px + env(safe-area-inset-top));
+  right: calc(8px + env(safe-area-inset-right));
+  max-height: 70vh;
+  overflow: auto;
+  pointer-events: auto;
+  z-index: 20;
+}
+
+.tuning-panel .lil-gui.root {
+  position: static;
+}
