@@ -194,12 +194,15 @@ export class Engine {
     this.simStats = null;
     this.paused = false;
     this.statusEl.hidden = true;
+    for (const resolve of this.pendingBlasts.values()) resolve(0);
     this.pendingBlasts.clear();
+    this.bench = null;
     const shared = Engine.sharedBuffer();
     this.sharedTransforms = shared !== null;
     this.transforms = new TransformReader(shared, MAX_SLOTS);
     this.sample = null;
     this.host = this.spawnHost(shared);
+    this.host.send({ type: 'pause', paused: document.hidden });
   }
 
   /** Sends a message to the scene's game rules (SceneDef.onMessage) in the simulation worker. */
@@ -217,6 +220,7 @@ export class Engine {
   /** Moves the far plane and fog so `offset` meters of camera distance don't eat the view distance. */
   setViewOffset(offset: number): void {
     const vd = this.quality.viewDistance;
+    if (this.camera.far === offset + vd) return;
     this.camera.far = offset + vd;
     this.camera.updateProjectionMatrix();
     const fog = this.scene.fog as THREE.Fog | null;

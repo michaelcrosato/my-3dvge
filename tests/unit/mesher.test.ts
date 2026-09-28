@@ -105,6 +105,21 @@ describe('ambient occlusion', () => {
 });
 
 describe('VoxelVolume', () => {
+  it('refreshes AO in all seven neighboring chunks after a corner edit', () => {
+    const v = new VoxelVolume(64, 64, 64);
+    for (const x of [1, 33]) for (const y of [1, 33]) for (const z of [1, 33]) v.set(x, y, z, 1);
+    v.set(31, 31, 31, 1);
+    v.set(32, 32, 32, 1);
+    v.dirtyMesh.clear();
+    v.dirtyCollider.clear();
+    v.set(32, 32, 32, 0);
+    expect([...v.dirtyMesh].sort()).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect([...v.dirtyCollider]).toEqual([7]);
+    const edited = meshChunk(v.extractPadded(0), palette);
+    v.set(32, 32, 32, 1);
+    expect(meshChunk(v.extractPadded(0), palette).colors).not.toEqual(edited.colors);
+  });
+
   it('stores voxels across chunks and tracks counts', () => {
     const v = new VoxelVolume(70, 40, 33);
     expect([v.cx, v.cy, v.cz]).toEqual([3, 2, 2]);

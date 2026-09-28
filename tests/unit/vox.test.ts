@@ -6,7 +6,10 @@ import { createVoxModel, readVox, voxGet, voxSet, writeVox } from '../../src/vox
 
 function randomFile() {
   let seed = 7;
-  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const rnd = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
   const models = [createVoxModel(7, 5, 9), createVoxModel(3, 3, 3)];
   for (const m of models) for (let i = 0; i < m.data.length; i++) if (rnd() < 0.4) m.data[i] = 1 + Math.floor(rnd() * 255);
   const palette = new Uint8Array(256 * 4);
@@ -19,6 +22,36 @@ function randomFile() {
 }
 
 describe('.vox reader/writer', () => {
+  it('bounds every chunk and record before reading or allocating', () => {
+    const valid = writeVox(randomFile());
+    expect(() => readVox(valid.subarray(0, valid.length - 1))).toThrow(/\.vox:/);
+    const corrupt = (offset: number, value: number) => {
+      const bytes = valid.slice();
+      new DataView(bytes.buffer).setInt32(offset, value, true);
+      return bytes;
+    };
+    for (const value of [-1, 0x7fffffff]) {
+      expect(() => readVox(corrupt(12, value))).toThrow(/\.vox:/);
+      expect(() => readVox(corrupt(16, value))).toThrow(/\.vox:/);
+      expect(() => readVox(corrupt(24, value))).toThrow(/\.vox:/);
+    }
+    // Find XYZI's count and MATL's first key length without assuming preceding chunk sizes.
+    for (let at = 20; at < valid.length;) {
+      const id = new TextDecoder().decode(valid.subarray(at, at + 4));
+      if (id === 'XYZI') expect(() => readVox(corrupt(at + 12, 0x7fffffff))).toThrow(/\.vox:/);
+      if (id === 'MATL') expect(() => readVox(corrupt(at + 20, -1))).toThrow(/\.vox:/);
+      const view = new DataView(valid.buffer);
+      at += 12 + view.getInt32(at + 4, true) + view.getInt32(at + 8, true);
+    }
+  });
+
+  it('round-trips UTF-8 material metadata and validates model dimensions', () => {
+    const file = randomFile();
+    file.materials.set(2, { name: 'Bâtiment 日本' });
+    expect(readVox(writeVox(file)).materials.get(2)).toEqual({ name: 'Bâtiment 日本' });
+    for (const n of [NaN, Infinity, 0.5]) expect(() => createVoxModel(n, 1, 1)).toThrow(/size/);
+  });
+
   it('round-trips models, palette and materials', () => {
     const src = randomFile();
     const file = readVox(writeVox(src));

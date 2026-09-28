@@ -36,9 +36,9 @@ const CONTROLS: [string, string, string, string][] = [
   ['Enter / exit vehicle', 'E', 'Y', 'ENTER'],
   ['Change camera', 'C', 'View', 'CAM'],
   ['Carrier view (hold)', 'V', 'LB', 'CARRIER'],
-  ['Rotate isometric view', 'Z / X', 'Right stick', 'Drag right side'],
+  ['Rotate isometric view', 'Z / X', 'D-pad ◀ / ▶', '—'],
   ['Reset flipped vehicle', 'R', 'B', 'RESET'],
-  ['Fast-forward carrier (path clear)', 'F', 'RB (hold)', '—'],
+  ['Fast-forward carrier (path clear)', 'F', 'D-pad ▲', '▶▶'],
   ['Pause', 'Esc', 'Menu', '❚❚'],
 ];
 
@@ -189,7 +189,7 @@ export class Screens {
     table.append(head);
     for (const row of CONTROLS) {
       const tr = el('tr');
-      row.forEach((c, i) => tr.append(el(i === 0 ? 'th' : 'td', '', c)));
+      row.forEach((c, i) => { tr.append(el(i === 0 ? 'th' : 'td', '', c)); });
       table.append(tr);
     }
     body.append(table);
@@ -455,7 +455,7 @@ export class Screens {
     const tick = (now: number) => {
       if (!dmg.isConnected) return;
       const t = Math.min(1, Math.max(0, (now - startAt) / 1200));
-      dmg.textContent = formatMoney(r.damage * (1 - Math.pow(1 - t, 3)));
+      dmg.textContent = formatMoney(r.damage * (1 - (1 - t) ** 3));
       if (t < 1) requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);

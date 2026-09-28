@@ -116,7 +116,7 @@ export interface SolidQuery {
 }
 
 /** Counts solid voxels inside a shape without modifying anything (contact tests for vehicles, etc.). */
-export function querySolid(world: SimWorld, shape: CarveShape, filter?: (sv: SimVolume) => boolean): SolidQuery {
+export function querySolid(world: SimWorld, shape: CarveShape, filter?: (sv: SimVolume) => boolean, voxelFilter?: (paletteIndex: number) => boolean): SolidQuery {
   const byVolume = new Map<SimVolume, number>();
   let count = 0;
   const acc: Vec3 = [0, 0, 0];
@@ -127,7 +127,8 @@ export function querySolid(world: SimWorld, shape: CarveShape, filter?: (sv: Sim
     if (!overlapsVolume(sv, ls)) continue;
     let n = 0;
     const lc: Vec3 = [0, 0, 0];
-    forVoxelsIn(sv, ls, (x, y, z) => {
+    forVoxelsIn(sv, ls, (x, y, z, v) => {
+      if (voxelFilter && !voxelFilter(v)) return;
       n++;
       lc[0] += x + 0.5;
       lc[1] += y + 0.5;

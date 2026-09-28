@@ -4,7 +4,6 @@ import { CHUNK_SIZE, VOXEL_SIZE } from '../voxel/constants.ts';
 
 interface ChunkView {
   mesh: THREE.Mesh;
-  version: number;
 }
 
 interface ChunkData {
@@ -12,7 +11,6 @@ interface ChunkData {
   normals: Float32Array;
   colors: Uint8Array;
   indices: Uint16Array | Uint32Array;
-  version: number;
 }
 
 export interface VolumeView {
@@ -23,6 +21,8 @@ export interface VolumeView {
   /** Small volumes: chunk geometry merged into one mesh (one draw call per volume). */
   merged: boolean;
   data: Map<number, ChunkData>;
+  /** Retained even for empty chunks so late worker results cannot resurrect deleted geometry. */
+  versions: Map<number, number>;
   mesh: THREE.Mesh | null;
 }
 
@@ -79,7 +79,7 @@ export class WorldView {
       group.updateMatrix();
     }
     const chunkCount = Math.ceil(info.size[0] / CHUNK_SIZE) * Math.ceil(info.size[1] / CHUNK_SIZE) * Math.ceil(info.size[2] / CHUNK_SIZE);
-    const view: VolumeView = { info, group, chunks: new Map(), merged: chunkCount <= MERGE_MAX_CHUNKS, data: new Map(), mesh: null };
+    const view: VolumeView = { info, group, chunks: new Map(), merged: chunkCount <= MERGE_MAX_CHUNKS, data: new Map(), versions: new Map(), mesh: null };
     this.volumes.set(info.id, view);
     if (info.slot >= 0) this.bySlot.set(info.slot, view);
     this.root.add(group);
@@ -104,6 +104,7 @@ export class WorldView {
       view.mesh = null;
     }
     view.data.clear();
+    view.versions.clear();
     this.dirtyViews.delete(view);
     view.group.removeFromParent();
     this.volumes.delete(id);
@@ -146,17 +147,17 @@ export class WorldView {
       this.orphans.set(r.volumeId, list);
       return;
     }
+    const version = view.versions.get(r.chunk);
+    if (version !== undefined && version >= r.version) return;
+    view.versions.set(r.chunk, r.version);
     if (view.merged) {
-      const prev = view.data.get(r.chunk);
-      if (prev && prev.version > r.version) return;
       if (r.indices.length === 0) view.data.delete(r.chunk);
-      else view.data.set(r.chunk, { positions: r.positions, normals: r.normals, colors: r.colors, indices: r.indices, version: r.version });
+      else view.data.set(r.chunk, { positions: r.positions, normals: r.normals, colors: r.colors, indices: r.indices });
       this.dirtyViews.add(view);
       this.meshesApplied++;
       return;
     }
     const existing = view.chunks.get(r.chunk);
-    if (existing && existing.version > r.version) return; // stale result
 
     if (r.indices.length === 0) {
       if (existing) {
@@ -181,14 +182,13 @@ export class WorldView {
     if (existing) {
       existing.mesh.geometry.dispose();
       existing.mesh.geometry = g;
-      existing.version = r.version;
     } else {
       const mesh = new THREE.Mesh(g, this.material);
       mesh.castShadow = view.info.castShadow !== false;
       mesh.receiveShadow = true;
       mesh.matrixAutoUpdate = false;
       view.group.add(mesh);
-      view.chunks.set(r.chunk, { mesh, version: r.version });
+      view.chunks.set(r.chunk, { mesh });
       this.chunkMeshes++;
     }
     this.meshesApplied++;

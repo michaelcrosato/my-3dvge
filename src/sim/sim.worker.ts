@@ -29,6 +29,7 @@ let paused = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let last = 0;
 let acc = 0;
+let started = false;
 /** Messages that arrive before the scene finished building. */
 const early: MainToSim[] = [];
 
@@ -104,6 +105,7 @@ async function init(msg: Extract<MainToSim, { type: 'init' }>): Promise<void> {
     if (world) post({ type: 'stats', stats: world.stats() });
   }, 250);
   last = performance.now();
+  started = true;
   tick();
 }
 
@@ -136,7 +138,12 @@ function handle(msg: MainToSim): void {
       break;
     case 'pause':
       paused = msg.paused;
-      if (!paused && timer === undefined) {
+      if (paused && timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      // Early messages are drained before init starts the loop. Never start a second loop there.
+      if (!paused && timer === undefined && started) {
         last = performance.now();
         acc = 0;
         tick();

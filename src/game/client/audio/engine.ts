@@ -156,6 +156,14 @@ export class AudioEngine implements GameAudio {
       this.counters.skipped++;
       return;
     }
+    this.lastPlayed.set(name, now);
+    const pitch = opts.pitch ?? (VARY.has(name) ? 1 + (Math.random() - 0.5) * 0.08 : 1);
+    this.enqueue(name, now + 0.004, gain, pan, pitch);
+  }
+
+  /** Scheduled fuse ticks share the same cap as immediate one-shots. */
+  private enqueue(name: string, t: number, gain: number, pan: number, pitch: number): void {
+    const now = this.ctx!.currentTime;
     this.prune(now);
     const drop = pickVoiceToDrop(this.voices, gain, VOICE_CAP);
     if (drop === 'skip') {
@@ -167,9 +175,7 @@ export class AudioEngine implements GameAudio {
       this.voices.splice(drop, 1);
       this.counters.dropped++;
     }
-    this.lastPlayed.set(name, now);
-    const pitch = opts.pitch ?? (VARY.has(name) ? 1 + (Math.random() - 0.5) * 0.08 : 1);
-    this.voices.push(this.spawn(name, now + 0.004, gain, pan, pitch));
+    this.voices.push(this.spawn(name, t, gain, pan, pitch));
     this.counters.played++;
   }
 
@@ -233,7 +239,7 @@ export class AudioEngine implements GameAudio {
   setCarrier(distance: number, rolling: boolean): void {
     this.carrierState = { distance, rolling };
     if (!this.ctx || !this.synth) return;
-    const level = rolling ? Math.min(1, Math.pow(14 / Math.max(distance, 1), 0.9)) * 0.55 : 0;
+    const level = rolling ? Math.min(1, (14 / Math.max(distance, 1)) ** 0.9) * 0.55 : 0;
     if (rolling && level > 0.004) {
       this.carrierVoice ??= createCarrier(this.synth, this.sfxBus!);
       this.carrierVoice.set(level, 0);
@@ -277,7 +283,7 @@ export class AudioEngine implements GameAudio {
     if (this.loopOn.fuse) {
       if (this.nextFuseTick < ctx.currentTime - 0.1) this.nextFuseTick = ctx.currentTime + 0.01;
       while (this.nextFuseTick < horizon) {
-        this.voices.push(this.spawn('fuse', this.nextFuseTick, 0.5, 0, 1));
+        this.enqueue('fuse', this.nextFuseTick, 0.5, 0, 1);
         this.nextFuseTick += 0.24;
       }
     }
