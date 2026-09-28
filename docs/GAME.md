@@ -34,8 +34,8 @@ big booms, radio chatter from "CHIEF" and "SPARKS", country-rock music that turn
 | train | FREIGHT HOPPER | — (bridges the rail cut with its flatbed) | — | — |
 | semi | COMMAND RIG | — (board to end the mission after the path is clear) | — | — |
 
-On foot: walk/run/jump; **E / Y** enters the nearest vehicle (≤ 4 m) and exits. **R** resets a flipped
-vehicle. Improvements over the original: drift assist + visible damage zone, ammo that refills, wider
+On foot: walk/run/jump; **E / Y** enters the nearest vehicle and exits. **R / B** puts the vehicle back
+on open ground (also recovers from pits and the rail cut). Improvements over the original: drift assist + visible damage zone, ammo that refills, wider
 and switchable cameras, instant restart, collision tested against remaining voxels only.
 
 ## Puzzles and objects
@@ -52,9 +52,11 @@ and switchable cameras, instant restart, collision tested against remaining voxe
   as breadcrumb trails to secrets), satellite dishes (2): gold = 100% of all, silver ≥ 75% average,
   bronze ≥ 40%.
 - **$ damage** counter (flavor). **Time Attack** (after a first clear): only lane buildings count, gaps
-  ignored; bronze 2:30, silver 2:00, gold 1:40, platinum 1:00.
+  ignored; bronze 3:30, silver 2:50, gold 2:20, platinum 1:50.
 - **Bonus: Quarry Rumble** (unlocked by finding both dishes, or by clearing Cinder Flats): destroy 12
-  targets against the clock; 1:00 / 0:45 / 0:35 / 0:25.
+  targets against the clock; 2:30 / 1:50 / 1:25 / 1:00.
+- Buildings collapse once ~20% of their voxels' worth of damage is dealt (vehicle hits add bonus damage);
+  fences, hay and bushes are crushed by any vehicle (and the carrier) on contact.
 - Records and unlocks persist in localStorage.
 
 ## Level: Cinder Flats (≈ 360 × 180 m, carrier ≈ 3:20)
@@ -83,7 +85,7 @@ carrier view. In Iso/Side/Tactical, movement is camera-relative (push where you 
 Keyboard: WASD/arrows drive · Space jump/thrust · Shift or K or left mouse = action · E enter/exit ·
 C camera · V carrier view · Z/X rotate iso · R reset vehicle · F fast-forward (path clear) · Esc pause.
 Gamepad: left stick drive (RT/LT throttle/reverse also work) · A jump · X/RB action · Y enter/exit ·
-View camera · LB carrier view · B reset · Menu pause · right stick orbit.
+View camera · LB carrier view · B reset · D-pad ▲ fast-forward · Menu pause · right stick look.
 Touch: left joystick · ACTION, JUMP, ENTER, CAM buttons · pause and carrier view at the top.
 
 ## Architecture
