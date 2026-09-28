@@ -7,15 +7,17 @@ import { environmentInfo, probeGpu, type GpuInfo } from '../debug/diagnostics.ts
 import { getErrors } from '../debug/error-overlay.ts';
 import { FrameStats } from '../debug/frame-stats.ts';
 import { Hud } from '../debug/hud.ts';
-import { Controls } from '../input/controls.ts';
+import { Controls, type Action } from '../input/controls.ts';
 import { Environment } from '../render/environment.ts';
 import { createRenderer, type BackendName } from '../render/renderer.ts';
 import { WorldView } from '../render/world-view.ts';
-import type { SimStats, SimToMain, Vec3 } from '../shared/protocol.ts';
+import type { PlayerInput, SimStats, SimToMain, Vec3 } from '../shared/protocol.ts';
+import { MAX_SLOTS, PLAYER_SLOT, TransformReader, interpolateSlot, transformBufferBytes } from '../shared/transforms.ts';
 import { installDebugHandle } from './debug-handle.ts';
 import { SimHost } from './sim-host.ts';
 
-const EYE_HEIGHT = 1.6;
+/** Eye height above the player capsule's center (center is 0.9 m above the feet). */
+const EYE_OFFSET = 0.7;
 /** Main-thread time budget per frame for uploading new chunk meshes. */
 const MESH_UPLOAD_BUDGET_MS = 3;
 
@@ -33,14 +35,19 @@ export class Engine {
   readonly controls: Controls;
   readonly hud: Hud;
   readonly host: SimHost;
+  readonly transforms: TransformReader;
+  readonly sharedTransforms: boolean;
   framesRendered = 0;
   pixelRatio = 1;
   gpuInfo: GpuInfo | null = null;
   simReady = false;
   simStats: SimStats | null = null;
   blastTarget: Vec3 = [0, 1, 0];
+  fly: boolean;
 
   private readonly flyPos = new THREE.Vector3(0, 3, 6);
+  private readonly playerPos = new THREE.Vector3();
+  private readonly tmpQuat = new THREE.Quaternion();
   private lastFrame = 0;
   private drawCalls = 0;
   private triangles = 0;
@@ -50,6 +57,7 @@ export class Engine {
     this.quality = QUALITY_PRESETS[params.quality ?? defaultQuality()];
     this.renderer = renderer;
     this.backend = backend;
+    this.fly = params.fly;
 
     const q = this.quality;
     this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, q.viewDistance);
@@ -58,6 +66,11 @@ export class Engine {
     this.scene.add(this.world.root);
 
     this.controls = new Controls(canvas, ui);
+    const crosshair = document.createElement('div');
+    crosshair.className = 'crosshair';
+    ui.append(crosshair);
+    this.addTouchButtons();
+
     this.hud = new Hud(ui, () => this.hudLines(), params.debug);
     this.hud.addAction({
       label: 'Copy diagnostics',
@@ -76,10 +89,14 @@ export class Engine {
       },
     });
 
-    this.host = new SimHost(params, null, {
+    const shared = window.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined' ? new SharedArrayBuffer(transformBufferBytes(MAX_SLOTS)) : null;
+    this.sharedTransforms = shared !== null;
+    this.transforms = new TransformReader(shared, MAX_SLOTS);
+    this.host = new SimHost(params, shared, {
       onSim: (msg) => this.onSimMessage(msg),
       onMesh: (r) => this.world.enqueue(r),
     });
+    document.addEventListener('visibilitychange', () => this.host.send({ type: 'pause', paused: document.hidden }));
 
     this.resize();
     window.addEventListener('resize', () => this.resize());
@@ -98,12 +115,18 @@ export class Engine {
     this.renderer.setAnimationLoop((t) => this.frame(t));
   }
 
+  protected addTouchButtons(): void {
+    this.controls.addTouchButton('Jump', { hold: 'jump' });
+    this.controls.addTouchButton('Crate', { action: 'spawn' });
+    this.controls.addTouchButton('Fly', { action: 'toggleFly' });
+  }
+
   private onSimMessage(msg: SimToMain): void {
     switch (msg.type) {
       case 'ready':
         this.simReady = true;
         this.blastTarget = msg.blastTarget;
-        this.flyPos.set(msg.spawn[0], msg.spawn[1] + EYE_HEIGHT, msg.spawn[2]);
+        this.flyPos.set(msg.spawn[0], msg.spawn[1] + 1.6, msg.spawn[2]);
         this.controls.yaw = msg.spawnYaw;
         break;
       case 'volumeAdded':
@@ -114,6 +137,9 @@ export class Engine {
         break;
       case 'stats':
         this.simStats = msg.stats;
+        break;
+      case 'frame':
+        this.transforms.push(msg.frame, msg.time, msg.transforms);
         break;
       default:
         break;
@@ -150,17 +176,55 @@ export class Engine {
     this.camera.updateProjectionMatrix();
   }
 
-  private updateFlyCamera(dt: number): void {
+  /** Unit vector the camera looks along. */
+  viewDir(): Vec3 {
     const c = this.controls;
-    const [sx, fz] = c.moveVector();
-    const speed = c.sprint() ? 16 : 6;
     const cp = Math.cos(c.pitch);
-    const fwd = new THREE.Vector3(-Math.sin(c.yaw) * cp, Math.sin(c.pitch), -Math.cos(c.yaw) * cp);
-    const right = new THREE.Vector3(Math.cos(c.yaw), 0, -Math.sin(c.yaw));
-    this.flyPos.addScaledVector(fwd, fz * speed * dt).addScaledVector(right, sx * speed * dt);
-    this.flyPos.y += c.vertical() * speed * dt;
-    this.camera.position.copy(this.flyPos);
-    this.camera.rotation.set(c.pitch, c.yaw, 0);
+    return [-Math.sin(c.yaw) * cp, Math.sin(c.pitch), -Math.cos(c.yaw) * cp];
+  }
+
+  protected handleAction(a: Action): void {
+    const origin: Vec3 = [this.camera.position.x, this.camera.position.y, this.camera.position.z];
+    if (a === 'spawn') this.host.send({ type: 'spawnCrate', origin, dir: this.viewDir() });
+    else if (a === 'toggleFly') {
+      this.fly = !this.fly;
+      if (this.fly) this.flyPos.copy(this.camera.position);
+    }
+  }
+
+  private updateInput(dt: number): void {
+    const c = this.controls;
+    for (const a of c.takeActions()) this.handleAction(a);
+    const input: PlayerInput = {
+      move: this.fly ? [0, 0] : c.moveVector(),
+      yaw: c.yaw,
+      pitch: c.pitch,
+      jump: !this.fly && c.jumpHeld(),
+      sprint: c.sprint(),
+      fly: this.fly,
+      vertical: c.vertical(),
+    };
+    this.host.send({ type: 'input', input });
+
+    if (this.fly) {
+      const [sx, fz] = c.moveVector();
+      const speed = c.sprint() ? 16 : 6;
+      const [dx, dy, dz] = this.viewDir();
+      this.flyPos.x += (dx * fz + Math.cos(c.yaw) * sx) * speed * dt;
+      this.flyPos.y += (dy * fz + c.vertical()) * speed * dt;
+      this.flyPos.z += (dz * fz - Math.sin(c.yaw) * sx) * speed * dt;
+    }
+  }
+
+  private applyTransforms(): void {
+    const sample = this.transforms.sample();
+    if (sample) {
+      for (const [slot, view] of this.world.bySlot) interpolateSlot(sample, slot, view.group.position, view.group.quaternion);
+      interpolateSlot(sample, PLAYER_SLOT, this.playerPos, this.tmpQuat);
+    }
+    if (this.fly || !sample) this.camera.position.copy(this.flyPos);
+    else this.camera.position.set(this.playerPos.x, this.playerPos.y + EYE_OFFSET, this.playerPos.z);
+    this.camera.rotation.set(this.controls.pitch, this.controls.yaw, 0);
   }
 
   private frame(time: number): void {
@@ -169,7 +233,8 @@ export class Engine {
     this.lastFrame = time;
 
     this.world.processQueue(MESH_UPLOAD_BUDGET_MS);
-    this.updateFlyCamera(dt);
+    this.updateInput(dt);
+    this.applyTransforms();
     this.env.follow(this.camera.position);
 
     this.renderer.render(this.scene, this.camera);
@@ -191,6 +256,9 @@ export class Engine {
       pixelRatio: this.pixelRatio,
       chunkMeshes: this.world.chunkMeshes,
       meshQueue: this.world.queued,
+      sharedTransforms: this.sharedTransforms,
+      mode: this.fly ? 'fly' : 'walk',
+      camera: this.camera.position.toArray().map((v) => Math.round(v * 100) / 100),
       sim: this.simStats,
     };
   }
@@ -209,16 +277,16 @@ export class Engine {
     };
   }
 
-  private hudLines(): string[] {
+  protected hudLines(): string[] {
     const avg = this.frameStats.average(60);
     const s = this.frameStats.summary(240);
     const sim = this.simStats;
     const k = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
     return [
-      `FPS ${avg > 0 ? (1000 / avg).toFixed(0) : '--'}  frame ${avg.toFixed(1)}ms  p95 ${s.p95.toFixed(1)}  sim ${sim ? sim.stepMs.toFixed(2) : '--'}ms`,
-      `bodies ${sim?.bodiesActive ?? 0} active / ${sim?.bodiesSleeping ?? 0} sleeping  voxels ${k(sim?.voxels ?? 0)}`,
+      `FPS ${avg > 0 ? (1000 / avg).toFixed(0) : '--'}  frame ${avg.toFixed(1)}ms  p95 ${s.p95.toFixed(1)}  sim ${sim ? `${sim.stepMs.toFixed(2)}ms (max ${sim.stepMsMax.toFixed(1)})` : '--'}`,
+      `bodies ${sim?.bodiesActive ?? 0} active / ${sim?.bodiesSleeping ?? 0} sleeping (${sim?.dynamicBodies ?? 0}/${this.params.maxBodies})  colliders ${k(sim?.colliders ?? 0)}  voxels ${k(sim?.voxels ?? 0)}`,
       `draw ${this.drawCalls}  tris ${k(this.triangles)}  chunks ${this.world.chunkMeshes}  queue ${this.world.queued}/${sim?.meshJobs ?? 0}`,
-      `${this.backend}  COI ${window.crossOriginIsolated ? 'yes' : 'NO'}  quality ${this.quality.name}  px ${this.pixelRatio.toFixed(2)}`,
+      `${this.backend}  COI ${window.crossOriginIsolated ? 'yes' : 'NO'} (${this.sharedTransforms ? 'SAB' : 'postMessage'})  quality ${this.quality.name}  px ${this.pixelRatio.toFixed(2)}  ${this.fly ? 'fly' : 'walk'}`,
       `build ${BUILD_INFO.shortSha}  ${BUILD_INFO.time.replace('T', ' ').slice(0, 16)}Z`,
     ];
   }

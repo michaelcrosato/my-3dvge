@@ -1,20 +1,30 @@
 /**
- * Simulation-side world state: every VoxelVolume with its transform, the shared palette, and mesh
- * dispatch for dirty chunks. Pure TypeScript with no worker globals, so it also runs in Node tests.
+ * Simulation-side world state: every VoxelVolume with its transform and rigid body, the shared palette,
+ * collider sync, sleeping/budget management and mesh dispatch. Pure TypeScript with no worker globals,
+ * so it also runs in Node tests.
  */
 import type { Params } from '../config/params.ts';
-import type { MeshJob, Quat, SimStats, Vec3, VolumeInfo } from '../shared/protocol.ts';
-import { CHUNK_SIZE } from '../voxel/constants.ts';
+import type { MeshJob, PlayerInput, Quat, SimSettings, SimStats, Vec3, VolumeInfo } from '../shared/protocol.ts';
+import { MAX_SLOTS, PLAYER_SLOT, SLOT_FLOATS } from '../shared/transforms.ts';
+import { mergeBoxes, mergeBoxesCoarse, type VoxelBox } from '../voxel/boxes.ts';
+import { CHUNK_SIZE, VOXEL_SIZE } from '../voxel/constants.ts';
+import { MATERIALS } from '../voxel/materials.ts';
 import { Palette } from '../voxel/palette.ts';
-import type { VoxelVolume } from '../voxel/volume.ts';
+import { VoxelVolume } from '../voxel/volume.ts';
 import type { MeshSink } from './mesh-dispatch.ts';
+import type { BoxShape, PhysicsBackend } from './physics/backend.ts';
+import { IDLE_INPUT, Player } from './player.ts';
 import type { SceneContext } from './scene-api.ts';
 
-/** Transform slots in the shared buffer; slot 0 is the player. */
-export const MAX_SLOTS = 2048;
-export const PLAYER_SLOT = 0;
-
 export type VolumeTag = 'scene' | 'crate' | 'debris';
+
+const VOXEL_M3 = VOXEL_SIZE * VOXEL_SIZE * VOXEL_SIZE;
+/** Dynamic bodies with more boxes than this fall back to coarser collider approximations. */
+const MAX_BODY_BOXES = 48;
+const SLEEP_LIN2 = 0.1 * 0.1;
+const SLEEP_ANG2 = 0.15 * 0.15;
+const SLEEP_AFTER_STEPS = 30;
+const KILL_Y = -25;
 
 export interface SimVolume {
   id: number;
@@ -27,6 +37,12 @@ export interface SimVolume {
   chunkVersions: Uint32Array;
   /** Simulation time (s) when created — the oldest debris is despawned first. */
   createdAt: number;
+  body: number;
+  /** Static: collider group per chunk. */
+  chunkColliders: Map<number, number>;
+  /** Dynamic: the body's compound collider group. */
+  colliders: number;
+  lowSpeedSteps: number;
 }
 
 export interface SimEvents {
@@ -34,27 +50,52 @@ export interface SimEvents {
   volumeRemoved(id: number): void;
 }
 
+export const DEFAULT_SETTINGS: SimSettings = {
+  gravity: -9.81,
+  blastRadius: 1.2,
+  blastPower: 1.5,
+  strengthScale: 1,
+  maxBodies: 150,
+  particleThreshold: 6,
+};
+
 export class SimWorld {
   readonly params: Params;
   readonly palette = new Palette();
   readonly volumes = new Map<number, SimVolume>();
+  readonly physics: PhysicsBackend | null;
+  readonly settings: SimSettings;
+  /** Palette indices used for spawned crates (reserved before the scene builds). */
+  readonly crateColors: number[];
   spawn: Vec3 = [0, 2, 0];
   spawnYaw = 0;
   blastTarget: Vec3 = [0, 1, 0];
   time = 0;
+  player: Player | null = null;
+  input: PlayerInput = IDLE_INPUT;
   private readonly sink: MeshSink | null;
   private readonly events: SimEvents;
+  private readonly bodyToVolume = new Map<number, SimVolume>();
   private nextId = 1;
   private rng: number;
   /** FIFO so a freed slot isn't immediately reused (the renderer may still read it for a frame). */
   private readonly freeSlots: number[] = [];
+  private steps = 0;
+  private stepMsAvg = 0;
+  private stepMsPeak = 0;
+  private stepMsMaxShown = 0;
+  private active = 0;
+  private sleeping = 0;
 
-  constructor(params: Params, sink: MeshSink | null, events: SimEvents, seed = 1337) {
+  constructor(params: Params, sink: MeshSink | null, events: SimEvents, physics: PhysicsBackend | null = null, seed = 1337) {
     this.params = params;
     this.sink = sink;
     this.events = events;
+    this.physics = physics;
     this.rng = seed;
-    for (let s = 1; s < MAX_SLOTS; s++) this.freeSlots.push(s);
+    this.settings = { ...DEFAULT_SETTINGS, maxBodies: params.maxBodies };
+    for (let s = PLAYER_SLOT + 1; s < MAX_SLOTS; s++) this.freeSlots.push(s);
+    this.crateColors = [this.palette.add(0x7a4f2a, 'wood'), this.palette.add(0xc28a4a, 'wood'), this.palette.add(0xb07a3e, 'wood')];
   }
 
   random(): number {
@@ -82,11 +123,22 @@ export class SimWorld {
     };
   }
 
+  /** Creates the player at the scene's spawn point (requires physics). */
+  spawnPlayer(): void {
+    if (this.physics && !this.player) {
+      this.player = new Player(this.physics, this.spawn);
+      this.player.gravity = this.settings.gravity;
+    }
+  }
+
   get freeSlotCount(): number {
     return this.freeSlots.length;
   }
 
-  addVolume(kind: 'static' | 'dynamic', volume: VoxelVolume, position: Vec3, rotation: Quat, tag: VolumeTag): SimVolume {
+  addVolume(
+    kind: 'static' | 'dynamic', volume: VoxelVolume, position: Vec3, rotation: Quat, tag: VolumeTag,
+    velocity?: { lin: Vec3; ang: Vec3 },
+  ): SimVolume {
     const slot = kind === 'dynamic' ? (this.freeSlots.shift() ?? -1) : -1;
     if (kind === 'dynamic' && slot < 0) throw new Error('Out of transform slots');
     const sv: SimVolume = {
@@ -99,13 +151,24 @@ export class SimWorld {
       slot,
       chunkVersions: new Uint32Array(volume.chunks.length),
       createdAt: this.time,
+      body: -1,
+      chunkColliders: new Map(),
+      colliders: -1,
+      lowSpeedSteps: 0,
     };
-    // Everything that exists starts dirty.
     for (const ci of volume.nonEmptyChunks()) {
       volume.dirtyMesh.add(ci);
       volume.dirtyCollider.add(ci);
     }
     this.volumes.set(sv.id, sv);
+    if (this.physics) {
+      sv.body = this.physics.createBody(kind === 'static' ? 'fixed' : 'dynamic', position, rotation);
+      this.bodyToVolume.set(sv.body, sv);
+      if (kind === 'dynamic') {
+        this.rebuildDynamicColliders(sv);
+        if (velocity) this.physics.setVelocity(sv.body, velocity.lin, velocity.ang);
+      }
+    }
     this.events.volumeAdded(this.info(sv));
     return sv;
   }
@@ -114,13 +177,216 @@ export class SimWorld {
     const sv = this.volumes.get(id);
     if (!sv) return;
     this.volumes.delete(id);
+    if (this.physics && sv.body >= 0) {
+      this.bodyToVolume.delete(sv.body);
+      this.physics.removeBody(sv.body); // also removes its colliders
+    }
     if (sv.slot >= 0) this.freeSlots.push(sv.slot);
     this.events.volumeRemoved(id);
+  }
+
+  volumeForBody(body: number): SimVolume | undefined {
+    return this.bodyToVolume.get(body);
   }
 
   info(sv: SimVolume): VolumeInfo {
     const v = sv.volume;
     return { id: sv.id, kind: sv.kind, slot: sv.slot, size: [v.sizeX, v.sizeY, v.sizeZ], position: sv.position, rotation: sv.rotation };
+  }
+
+  // ---------------------------------------------------------------- colliders
+
+  private boxShapes(sv: SimVolume, boxes: VoxelBox[], perMaterial: boolean): BoxShape[] {
+    const vol = sv.volume;
+    return boxes.map((b) => {
+      const dx = b.x1 - b.x0, dy = b.y1 - b.y0, dz = b.z1 - b.z0;
+      let density = 1000, friction = 0.8, restitution = 0.05;
+      if (perMaterial) {
+        const m = MATERIALS[b.key - 1]!;
+        density = m.density;
+        friction = m.friction;
+        restitution = m.restitution;
+      } else if (sv.kind === 'dynamic') {
+        // Mixed or approximated box: exact mass from the voxels it actually contains.
+        let mass = 0;
+        for (let z = b.z0; z < b.z1; z++)
+          for (let y = b.y0; y < b.y1; y++)
+            for (let x = b.x0; x < b.x1; x++) {
+              const v = vol.get(x, y, z);
+              if (v) mass += this.palette.material(v).density * VOXEL_M3;
+            }
+        density = mass / (dx * dy * dz * VOXEL_M3);
+        friction = 0.7;
+        restitution = 0.08;
+      }
+      return {
+        hx: (dx * VOXEL_SIZE) / 2,
+        hy: (dy * VOXEL_SIZE) / 2,
+        hz: (dz * VOXEL_SIZE) / 2,
+        cx: (b.x0 + dx / 2) * VOXEL_SIZE,
+        cy: (b.y0 + dy / 2) * VOXEL_SIZE,
+        cz: (b.z0 + dz / 2) * VOXEL_SIZE,
+        density,
+        friction,
+        restitution,
+      };
+    });
+  }
+
+  /** One compound collider per dynamic body; mass = Σ voxels × material density. */
+  rebuildDynamicColliders(sv: SimVolume): void {
+    if (!this.physics) return;
+    const vol = sv.volume;
+    if (sv.colliders >= 0) this.physics.removeColliders(sv.colliders);
+    const materialKey = (v: number) => this.palette.materials[v]! + 1;
+    let boxes = mergeBoxes(vol, 0, 0, 0, vol.sizeX, vol.sizeY, vol.sizeZ, materialKey);
+    let perMaterial = true;
+    if (boxes.length > MAX_BODY_BOXES) {
+      boxes = mergeBoxes(vol, 0, 0, 0, vol.sizeX, vol.sizeY, vol.sizeZ);
+      perMaterial = false;
+    }
+    for (let f = 2; boxes.length > MAX_BODY_BOXES * 2 && f <= 16; f *= 2) boxes = mergeBoxesCoarse(vol, f);
+    sv.colliders = this.physics.addBoxes(sv.body, this.boxShapes(sv, boxes, perMaterial));
+    vol.dirtyCollider.clear();
+  }
+
+  /** Rebuilds colliders for chunks that changed: per chunk for static volumes, per body for dynamic. */
+  syncColliders(): void {
+    if (!this.physics) return;
+    for (const sv of this.volumes.values()) {
+      const vol = sv.volume;
+      if (vol.dirtyCollider.size === 0) continue;
+      if (sv.kind === 'dynamic') {
+        this.rebuildDynamicColliders(sv);
+        continue;
+      }
+      for (const ci of vol.dirtyCollider) {
+        const old = sv.chunkColliders.get(ci);
+        if (old !== undefined) this.physics.removeColliders(old);
+        sv.chunkColliders.delete(ci);
+        if (!vol.chunks[ci]) continue;
+        const [cxi, cyi, czi] = vol.chunkCoords(ci);
+        const x0 = cxi * CHUNK_SIZE, y0 = cyi * CHUNK_SIZE, z0 = czi * CHUNK_SIZE;
+        const boxes = mergeBoxes(vol, x0, y0, z0, Math.min(vol.sizeX, x0 + CHUNK_SIZE), Math.min(vol.sizeY, y0 + CHUNK_SIZE), Math.min(vol.sizeZ, z0 + CHUNK_SIZE));
+        if (boxes.length) sv.chunkColliders.set(ci, this.physics.addBoxes(sv.body, this.boxShapes(sv, boxes, false)));
+      }
+      vol.dirtyCollider.clear();
+    }
+  }
+
+  // ---------------------------------------------------------------- simulation
+
+  applySettings(s: Partial<SimSettings>): void {
+    Object.assign(this.settings, s);
+    if (s.gravity !== undefined) {
+      this.physics?.setGravity(s.gravity);
+      if (this.player) this.player.gravity = s.gravity;
+    }
+  }
+
+  step(dt: number): void {
+    const t0 = performance.now();
+    this.syncColliders();
+    if (this.physics) {
+      this.player?.update(dt, this.input);
+      this.physics.step(dt);
+      this.manageBodies();
+      this.enforceBudget();
+    }
+    this.time += dt;
+    this.steps++;
+    const ms = performance.now() - t0;
+    this.stepMsAvg = this.steps === 1 ? ms : this.stepMsAvg * 0.95 + ms * 0.05;
+    this.stepMsPeak = Math.max(this.stepMsPeak, ms);
+    if (this.steps % 60 === 0) {
+      this.stepMsMaxShown = this.stepMsPeak;
+      this.stepMsPeak = 0;
+    }
+  }
+
+  /** Aggressive sleeping (Rapier's own thresholds are conservative) and kill-plane cleanup. */
+  private manageBodies(): void {
+    const physics = this.physics!;
+    let active = 0, sleeping = 0;
+    const fallen: number[] = [];
+    for (const sv of this.volumes.values()) {
+      if (sv.kind !== 'dynamic') continue;
+      if (physics.isSleeping(sv.body)) {
+        sleeping++;
+        sv.lowSpeedSteps = 0;
+        continue;
+      }
+      active++;
+      const v = physics.linvel(sv.body);
+      const w = physics.angvel(sv.body);
+      if (v[0] * v[0] + v[1] * v[1] + v[2] * v[2] < SLEEP_LIN2 && w[0] * w[0] + w[1] * w[1] + w[2] * w[2] < SLEEP_ANG2) {
+        if (++sv.lowSpeedSteps > SLEEP_AFTER_STEPS) physics.sleep(sv.body);
+      } else {
+        sv.lowSpeedSteps = 0;
+      }
+      if (physics.centerOfMass(sv.body)[1] < KILL_Y) fallen.push(sv.id);
+    }
+    for (const id of fallen) this.removeVolume(id);
+    this.active = active;
+    this.sleeping = sleeping;
+  }
+
+  /** Despawns the oldest debris (then oldest crates, then oldest scene bodies) above the body cap. */
+  enforceBudget(): number {
+    const dynamic = [...this.volumes.values()].filter((v) => v.kind === 'dynamic');
+    let excess = dynamic.length - this.settings.maxBodies;
+    if (excess <= 0) return 0;
+    const rank: Record<VolumeTag, number> = { debris: 0, crate: 1, scene: 2 };
+    dynamic.sort((a, b) => rank[a.tag] - rank[b.tag] || a.createdAt - b.createdAt || a.id - b.id);
+    let removed = 0;
+    for (const sv of dynamic) {
+      if (excess-- <= 0) break;
+      this.removeVolume(sv.id);
+      removed++;
+    }
+    return removed;
+  }
+
+  dynamicCount(): number {
+    let n = 0;
+    for (const sv of this.volumes.values()) if (sv.kind === 'dynamic') n++;
+    return n;
+  }
+
+  /** Throws a 5×5×5 wooden crate from `origin` along `dir`. */
+  spawnCrate(origin: Vec3, dir: Vec3): SimVolume {
+    const n = 5;
+    const crate = new VoxelVolume(n, n, n);
+    const [dark, light, mid] = this.crateColors as [number, number, number];
+    crate.fillBox(0, 0, 0, n, n, n, (x, y, z) => {
+      const edges = (x === 0 || x === n - 1 ? 1 : 0) + (y === 0 || y === n - 1 ? 1 : 0) + (z === 0 || z === n - 1 ? 1 : 0);
+      return edges >= 2 ? dark : y % 2 ? light : mid;
+    });
+    const half = (n * VOXEL_SIZE) / 2;
+    const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+    const d: Vec3 = [dir[0] / len, dir[1] / len, dir[2] / len];
+    const pos: Vec3 = [origin[0] + d[0] * 1.2 - half, origin[1] + d[1] * 1.2 - half, origin[2] + d[2] * 1.2 - half];
+    return this.addVolume('dynamic', crate, pos, [0, 0, 0, 1], 'crate', {
+      lin: [d[0] * 6, d[1] * 6 + 1.5, d[2] * 6],
+      ang: [this.random() - 0.5, this.random() - 0.5, this.random() - 0.5],
+    });
+  }
+
+  /** Writes the player (slot 0) and every dynamic body; returns the number of floats used. */
+  writeTransforms(out: Float32Array): number {
+    let maxSlot = PLAYER_SLOT;
+    if (this.player) {
+      const p = this.player.position;
+      out.set([p[0], p[1], p[2], 0, 0, 0, 1], PLAYER_SLOT * SLOT_FLOATS);
+    }
+    if (this.physics) {
+      for (const sv of this.volumes.values()) {
+        if (sv.kind !== 'dynamic') continue;
+        this.physics.readTransform(sv.body, out, sv.slot * SLOT_FLOATS);
+        if (sv.slot > maxSlot) maxSlot = sv.slot;
+      }
+    }
+    return (maxSlot + 1) * SLOT_FLOATS;
   }
 
   /** Sends every dirty chunk to the mesher pool. Returns the number of jobs submitted. */
@@ -132,12 +398,11 @@ export class SimWorld {
       for (const ci of vol.dirtyMesh) {
         if (this.sink) {
           const [cxi, cyi, czi] = vol.chunkCoords(ci);
-          const version = ++sv.chunkVersions[ci]!;
           const job: MeshJob = {
             type: 'mesh',
             volumeId: sv.id,
             chunk: ci,
-            version,
+            version: ++sv.chunkVersions[ci]!,
             origin: [cxi * CHUNK_SIZE, cyi * CHUNK_SIZE, czi * CHUNK_SIZE],
             data: vol.extractPadded(ci),
           };
@@ -156,17 +421,15 @@ export class SimWorld {
     return n;
   }
 
-  baseStats(): SimStats {
-    let dynamic = 0;
-    for (const sv of this.volumes.values()) if (sv.kind === 'dynamic') dynamic++;
+  stats(): SimStats {
     return {
-      stepMs: 0,
-      stepMsMax: 0,
-      steps: 0,
-      dynamicBodies: dynamic,
-      bodiesActive: 0,
-      bodiesSleeping: 0,
-      colliders: 0,
+      stepMs: this.stepMsAvg,
+      stepMsMax: this.stepMsMaxShown,
+      steps: this.steps,
+      dynamicBodies: this.dynamicCount(),
+      bodiesActive: this.active,
+      bodiesSleeping: this.sleeping,
+      colliders: this.physics?.colliderCount() ?? 0,
       voxels: this.voxelCount(),
       volumes: this.volumes.size,
       meshJobs: this.sink?.inFlight ?? 0,
