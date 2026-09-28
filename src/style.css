@@ -11,6 +11,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -154,4 +158,57 @@ body {
   font: 11px ui-monospace, Menlo, monospace;
   -webkit-user-select: text;
   user-select: text;
+}
+
+.joy-base {
+  position: absolute;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  background: rgba(8, 12, 18, 0.25);
+}
+
+.joy-knob {
+  position: absolute;
+  left: 35px;
+  top: 35px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.touch-buttons {
+  position: absolute;
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: repeat(2, 72px);
+  gap: 10px;
+}
+
+#ui .touch-btn {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0;
+}
+
+#ui .touch-btn.primary {
+  background: rgba(200, 70, 40, 0.65);
+}
+
+.crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
 }
