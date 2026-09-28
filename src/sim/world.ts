@@ -53,6 +53,8 @@ export interface VolumeOptions {
   /** Detonates when damaged or (dynamic) hit hard. Default: auto-detected for small volumes. */
   explosive?: boolean;
   castShadow?: boolean;
+  /** Multiplies collider density (e.g. light, pushable props that look like concrete). */
+  massScale?: number;
   userData?: unknown;
 }
 
@@ -80,6 +82,7 @@ export interface SimVolume {
   expiresAt: number;
   lastVel: Vec3;
   castShadow: boolean;
+  massScale: number;
   userData: unknown;
 }
 
@@ -271,6 +274,7 @@ export class SimWorld {
       expiresAt: opts.lifetime !== undefined ? this.time + opts.lifetime : Number.POSITIVE_INFINITY,
       lastVel: [0, 0, 0],
       castShadow: opts.castShadow ?? true,
+      massScale: opts.massScale ?? 1,
       userData: opts.userData,
     };
     for (const ci of volume.nonEmptyChunks()) {
@@ -420,6 +424,7 @@ export class SimWorld {
         friction = 0.7;
         restitution = 0.08;
       }
+      density *= sv.massScale;
       return {
         hx: (dx * VOXEL_SIZE) / 2,
         hy: (dy * VOXEL_SIZE) / 2,

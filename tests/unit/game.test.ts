@@ -107,4 +107,39 @@ describe('PATHBREAKERS rules', () => {
     const results = g.events().find((e) => e.e === 'results');
     expect(results && results.e === 'results' ? results.results.medals.time : undefined).toBe('platinum');
   });
+
+  it('PLOWHORSE can shove a concrete block into a drainage pit (gap filled)', async () => {
+    const g = await boot('cinder');
+    g.send({ t: 'start', mode: 'mission' });
+    g.send({ t: 'skipFlyover' });
+    g.run(3.2);
+    const w = g.world;
+    const dozer = [...w.volumes.values()].find((v) => v.tag === 'vehicle' && v.volume.sizeX === 30 && v.volume.sizeZ === 46)!;
+    // Park the dozer south of the first block (x 42, z 9), facing north (-z), and board it.
+    w.physics!.setPose(dozer.body, [42 - 1.5, 0.4, 12.2], [0, 0, 0, 1], true);
+    w.player!.teleport([39, 0, 15]);
+    g.run(0.3);
+    g.send({ t: 'input', input: g.input({ enter: 1 }) });
+    g.run(0.2);
+    expect(g.snap().player.vehicle).toBe('dozer');
+    g.send({ t: 'input', input: g.input({ enter: 1, move: [0, 0.7] }) });
+    for (let i = 0; i < 20 * 60 && !g.snap().gaps.find((x) => x.id === 2)!.filled; i++) w.step(1 / 60);
+    expect(g.snap().gaps.find((x) => x.id === 2)!.filled).toBe(true);
+    expect(g.events().some((e) => e.e === 'gapFilled')).toBe(true);
+  });
+
+  it('a disturbed TNT crate lights its fuse and detonates', async () => {
+    const g = await boot('cinder');
+    g.send({ t: 'start', mode: 'mission' });
+    g.send({ t: 'skipFlyover' });
+    g.run(3.2);
+    const w = g.world;
+    const tnt = [...w.volumes.values()].find((v) => v.explosive && v.kind === 'dynamic')!;
+    w.physics!.applyImpulse(tnt.body, [0, 0, 400]);
+    g.run(1);
+    expect(g.events().some((e) => e.e === 'fuse')).toBe(true);
+    g.run(8.5);
+    expect(g.events().filter((e) => e.e === 'explosion').length).toBeGreaterThan(0);
+    expect(w.volumes.has(tnt.id)).toBe(false);
+  });
 });

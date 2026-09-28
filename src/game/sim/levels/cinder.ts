@@ -88,7 +88,7 @@ export const cinderFlats: LevelDef = {
     g.rect(158, -8, 178, 8, C.concrete, 0.02);
     // Rail cut and drainage pits (holes in the ground).
     g.hole(-21.6, -86, -18.4, 86, -1.2);
-    for (const x of [40.2, 48.2]) g.hole(x, -2, x + 3.6, 2, -1.2);
+    for (const x of [42, 50]) g.hole(x - 2, -2.2, x + 2, 2.2, -1.2);
 
     // ---- start and end
     b.prop('safePad', -168, 0, { w: 160, d: 120 });
@@ -146,7 +146,7 @@ export const cinderFlats: LevelDef = {
     // ---- drainage pits and concrete blocks
     for (const x of [42, 50]) {
       b.block(x, 9);
-      b.gap('pit', x - 1.8, x + 1.8, -2, 2);
+      b.gap('pit', x - 2, x + 2, -2.2, 2.2);
     }
 
     // ---- terraces with mounds; TAILWHIP and SKYLARK
@@ -171,7 +171,7 @@ export const cinderFlats: LevelDef = {
     b.building('house', 150, 24, { name: 'HOUSE', value: 150_000, variant: 2 });
     const wh = b.building('warehouse', 150, -34, { name: 'DEPOT HALL', value: 450_000 });
     const whH = (b.world.volumes.get(wh)?.volume.sizeY ?? 60) * VS;
-    b.dish(150, -34, whH);
+    b.dish(150, -34, whH, wh);
     b.ammo(118, 18);
     for (const [x, z] of [[96, -20], [136, 30], [120, 40], [40, 30], [10, -45], [-120, 60]] as const) b.prop('tree', x, z);
     for (const [x, z] of [[30, 18], [140, 8], [-30, -12]] as const) b.prop('wreck', x, z);

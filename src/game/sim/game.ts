@@ -127,7 +127,8 @@ export class LevelBuilder {
   block(x: number, z: number): void {
     const model = buildProp('block', this.kit);
     const { pos, rot } = placeModel(PROP_DIMS.block, x, 0.01, z);
-    const sv = this.world.addVolume('dynamic', model, pos, rot, 'prop', { destructible: false, body: { angularDamping: 0.8, linearDamping: 0.3 } });
+    // Looks like concrete, pushes like a crate: light enough for PLOWHORSE.
+    const sv = this.world.addVolume('dynamic', model, pos, rot, 'prop', { destructible: false, massScale: 0.05, body: { angularDamping: 0.8, linearDamping: 0.3 } });
     this.game.blocks.push(sv);
   }
 
@@ -136,12 +137,13 @@ export class LevelBuilder {
     this.game.rdus.push({ pos: [x, g, z], lit: false });
   }
 
-  dish(x: number, z: number, y?: number): void {
+  /** A satellite dish (optionally on a building's roof: it drops to the ground if that building falls). */
+  dish(x: number, z: number, y?: number, host?: number): void {
     const model = buildProp('dish', this.kit);
     const g = y ?? Math.max(0, this.world.groundHeight(x, z));
     const { pos, rot } = placeModel([model.sizeX, model.sizeY, model.sizeZ], x, g, z);
-    this.world.addVolume('static', model, pos, rot, 'scene', { destructible: false });
-    this.game.dishes.push({ pos: [x, g + 1, z], found: false });
+    const sv = this.world.addVolume('static', model, pos, rot, 'scene', { destructible: false });
+    this.game.dishes.push({ pos: [x, g + 1, z], found: false, sv, host: host ?? -1 });
   }
 
   ammo(x: number, z: number): void {
@@ -169,7 +171,7 @@ export class LevelBuilder {
         for (const b of this.game.blocks) {
           if (!this.world.volumes.has(b.id)) continue;
           const c = this.world.physics!.centerOfMass(b.body);
-          if (c[0] > x0 - 0.5 && c[0] < x1 + 0.5 && c[2] > z0 - 0.6 && c[2] < z1 + 0.6 && c[1] < 0) {
+          if (c[0] > x0 - 0.3 && c[0] < x1 + 0.3 && c[2] > z0 - 0.3 && c[2] < z1 + 0.3 && c[1] < 0.25) {
             g.latched = true;
             this.world.physics!.sleep(b.body);
             this.game.emit({ e: 'gapFilled', id: info.id });
@@ -207,7 +209,7 @@ export class PathbreakersGame {
   readonly tnts: Tnt[] = [];
   readonly blocks: SimVolume[] = [];
   readonly rdus: { pos: Vec3; lit: boolean }[] = [];
-  readonly dishes: { pos: Vec3; found: boolean }[] = [];
+  readonly dishes: { pos: Vec3; found: boolean; sv: SimVolume; host: number }[] = [];
   readonly survivors: { pos: Vec3; state: 'hidden' | 'waiting' | 'rescued'; structure: number }[] = [];
   readonly ammo: { sv: SimVolume; home: Vec3; respawn: number }[] = [];
   readonly crushables = new Set<number>();
@@ -444,6 +446,7 @@ export class PathbreakersGame {
       case 'running':
       case 'clear':
         this.time += dt;
+        for (const g of this.gaps) g.filled(); // latch pits (emits gapFilled promptly)
         this.updateTnt(dt);
         this.updatePickups(dt);
         this.updateCarrier();
@@ -684,6 +687,16 @@ export class PathbreakersGame {
     this.damage += m.info.value;
     this.emit({ e: 'collapse', id: m.info.id, name: m.info.name, x: m.info.x, y: m.info.h / 2, z: m.info.z, value: m.info.value, inLane: m.info.inLane });
     if (m.info.inLane) this.radio(`collapse:${m.info.name}`);
+    for (const d of this.dishes) {
+      if (d.host !== m.info.id || !this.world.volumes.has(d.sv.id)) continue;
+      // The roof is gone: the dish tumbles to the ground next to the rubble.
+      const model = d.sv.volume;
+      this.world.removeVolume(d.sv.id);
+      const gx = d.pos[0] + 2, gz = d.pos[2];
+      const { pos, rot } = placeModel([model.sizeX, model.sizeY, model.sizeZ], gx, 0, gz, 0.6);
+      d.sv = this.world.addVolume('static', model, pos, rot, 'scene', { destructible: false });
+      d.pos = [gx, 1, gz];
+    }
     for (const s of this.survivors) {
       if (s.structure === m.info.id && s.state === 'hidden') {
         // They run out toward open ground (away from the lane).
@@ -881,6 +894,7 @@ export class PathbreakersGame {
     const near = !v ? this.nearestVehicle() : null;
     let prompt: string | null = null;
     if (v) prompt = v.kind === 'semi' ? null : `Exit ${VEHICLE_NAMES[v.kind]}`;
+    if (this.state === 'clear' && !near) prompt = this.carrier?.fastForward ? 'F  Carrier fast-forwarding ▶▶' : 'F  Fast-forward the carrier · or board the COMMAND RIG';
     else if (near) prompt = near.v.kind === 'semi' ? (this.state === 'clear' ? 'Board the COMMAND RIG — finish mission' : 'COMMAND RIG (clear the path first)') : `Enter ${VEHICLE_NAMES[near.v.kind]}`;
     const trainAligned = this.vehicles.some((x) => x instanceof Train && Math.abs(x.deckCenterZ() - (this.level.lane?.z ?? 0)) <= 0.8);
     const heading = v ? v.heading() : this.pilotYaw;

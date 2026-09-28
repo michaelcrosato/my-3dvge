@@ -62,6 +62,8 @@ class PathbreakersClient implements GameClient {
   private flowTimer = 0;
   private screenAfter: { at: number; show: () => void } | null = null;
   private throttleHeld = 0;
+  private fastButton: HTMLButtonElement | null = null;
+  private loading: HTMLDivElement | null = null;
 
   async attach(engine: Engine): Promise<void> {
     this.engine = engine;
@@ -129,6 +131,11 @@ class PathbreakersClient implements GameClient {
       return;
     }
     this.flow = 'loading';
+    if (this.loading) {
+      this.loading.hidden = false;
+      const text = this.loading.querySelector('.pb-loading-text');
+      if (text) text.textContent = `LOADING ${level === 'quarry' ? 'QUARRY RUMBLE' : 'CINDER FLATS'}…`;
+    }
     this.level = null;
     this.snap = null;
     this.fuses = [];
@@ -213,6 +220,13 @@ class PathbreakersClient implements GameClient {
     this.engine.ui.append(top);
     c.addTouchButton('❚❚', { action: 'pause', className: 'pb-pause', parent: top });
     c.addTouchButton('CARRIER', { hold: 'carrierCam', className: 'pb-carrier', parent: top });
+    this.fastButton = c.addTouchButton('▶▶', { action: 'fast', className: 'pb-carrier pb-fast', parent: top });
+    this.fastButton.hidden = true;
+    this.loading = document.createElement('div');
+    this.loading.className = 'pb-loading';
+    this.loading.innerHTML = '<div class="pb-loading-card"><div class="pb-loading-stripes"></div><div class="pb-loading-text">LOADING</div></div>';
+    this.loading.hidden = true;
+    this.engine.ui.append(this.loading);
   }
 
   // ---------------------------------------------------------------- engine callbacks
@@ -229,6 +243,7 @@ class PathbreakersClient implements GameClient {
       this.rig.level = msg.data;
       this.ui.setLevel(msg.data);
       this.markers.setLevel(msg.data);
+      if (this.loading) this.loading.hidden = true;
       if (this.flow === 'loading' && this.pending) {
         if (this.pending.quick) this.beginMission();
         else this.showBriefing();
@@ -387,7 +402,9 @@ class PathbreakersClient implements GameClient {
       else if (a === 'reset') this.counters.reset++;
       else if (a === 'cam') this.cycleCamera();
       else if (a === 'pause') this.pause();
+      else if (a === 'fast') this.send({ t: 'fastForward', on: !this.snap?.carrier?.fastForward });
     }
+    if (this.snap?.state === 'flyover' && (c.keyPressed('Enter') || c.keyPressed('Space') || gp.pressed.has('a') || gp.pressed.has('start'))) this.send({ t: 'skipFlyover' });
     if (c.keyPressed('KeyE') || gp.pressed.has('y')) this.counters.enter++;
     if (c.keyPressed('KeyR') || gp.pressed.has('b')) this.counters.reset++;
     if (c.keyPressed('KeyC') || gp.pressed.has('back')) this.cycleCamera();
@@ -514,6 +531,8 @@ class PathbreakersClient implements GameClient {
       a.setCarrier(999, false);
     }
     a.update(dt);
+
+    if (this.fastButton) this.fastButton.hidden = !(snap?.state === 'clear' && this.flow === 'playing' && engine.controls.isTouch);
 
     // UI.
     const cam = engine.camera;
