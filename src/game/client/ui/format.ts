@@ -57,7 +57,7 @@ const KEY_LABELS: Record<string, Record<InputDevice, string>> = {
   E: { keyboard: 'E', gamepad: 'Y', touch: 'ENTER' },
   Y: { keyboard: 'E', gamepad: 'Y', touch: 'ENTER' },
   R: { keyboard: 'R', gamepad: 'B', touch: 'RESET' },
-  F: { keyboard: 'F', gamepad: 'RB', touch: 'FAST' },
+  F: { keyboard: 'F', gamepad: 'D-PAD ▲', touch: '▶▶' },
   C: { keyboard: 'C', gamepad: 'VIEW', touch: 'CAM' },
   V: { keyboard: 'V', gamepad: 'LB', touch: 'CARRIER' },
   SHIFT: { keyboard: 'SHIFT', gamepad: 'X', touch: 'ACTION' },

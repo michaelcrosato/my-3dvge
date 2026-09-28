@@ -18,6 +18,7 @@ async function arena() {
   const hooks: VehicleHooks = {
     world,
     canWreck: (sv) => sv.destructible && sv.tag !== 'vehicle',
+    isCrushable: () => false,
     onHit: () => hits++,
     onEvent: (e) => events.push(e.e),
     fireMissile: () => undefined,

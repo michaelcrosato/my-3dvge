@@ -93,7 +93,8 @@ export class Markers {
         const s = this.structures.get(b.id);
         if (!s) continue;
         live.add(b.id);
-        this.placeArrow(b.id, s.x, s.h + 2.2, s.z, b.level, b.eta, project);
+        // Without a rolling carrier (time attack) the ETA means nothing: show a plain marker.
+        this.placeArrow(b.id, s.x, s.h + 2.2, s.z, b.level, snap.mode === 'mission' && snap.carrier?.eta != null ? b.eta : 999, project);
       }
       const next = snap.carrier?.next;
       if (next !== null && next !== undefined && next < 0) {

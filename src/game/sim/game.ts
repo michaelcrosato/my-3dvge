@@ -6,6 +6,7 @@
 import type { Vec3 } from '../../shared/protocol.ts';
 import { add, length, scale, sub } from '../../shared/math.ts';
 import type { SceneContext } from '../../sim/scene-api.ts';
+import type { BoxShape } from '../../sim/physics/backend.ts';
 import type { SimVolume, SimWorld } from '../../sim/world.ts';
 import { VoxelVolume } from '../../voxel/volume.ts';
 import type {
@@ -16,7 +17,7 @@ import { VEHICLE_NAMES } from '../shared/types.ts';
 import { PROP_DIMS, buildBuilding, buildProp, color, createArtKit, type ArtKit, type BuildingKind, type BuildingOptions, type PropKind, type PropOptions } from './art/index.ts';
 import { Carrier } from './carrier.ts';
 import { GroundPainter } from './ground-paint.ts';
-import { Bike, Mech, Train, Vehicle, spawnVehicle, type DriveIntent, type VehicleHooks } from './vehicles.ts';
+import { Bike, Train, Vehicle, spawnVehicle, type DriveIntent, type VehicleHooks } from './vehicles.ts';
 import { placeModel, VS, yawOfDir, yawQuat } from './util.ts';
 
 export interface LevelDef {
@@ -86,7 +87,7 @@ export class LevelBuilder {
     const y = Math.max(0, this.world.groundHeight(x, z));
     const { pos, rot } = placeModel([model.sizeX, model.sizeY, model.sizeZ], x, y === Number.NEGATIVE_INFINITY ? 0 : y, z, o.yaw ?? 0);
     const sv = this.world.addVolume('static', model, pos, rot, 'scene', { explosive: kind === 'pump' });
-    const s = this.world.structures.register(sv.id, { collapseAt: o.collapseAt ?? (kind === 'office' ? 0.22 : 0.3), fragments: o.fragments ?? (kind === 'office' ? 16 : 9), debrisLifetime: 7 });
+    const s = this.world.structures.register(sv.id, { collapseAt: o.collapseAt ?? (kind === 'office' ? 0.16 : 0.2), fragments: o.fragments ?? (kind === 'office' ? 16 : 9), debrisLifetime: 7 });
     const fp = s.footprint;
     const info: StructureInfo = {
       id: sv.id,
@@ -111,7 +112,16 @@ export class LevelBuilder {
     const y = o.y ?? (Number.isFinite(ground) ? ground : 0);
     const { pos, rot } = placeModel([model.sizeX, model.sizeY, model.sizeZ], x, y, z, o.yaw ?? 0);
     const destructible = !['mound', 'ramp', 'track', 'loadingRamp', 'safePad', 'block'].includes(kind);
-    const sv = this.world.addVolume('static', model, pos, rot, 'scene', { destructible, collide: o.solid ?? kind !== 'safePad', userData: { crushable: !!o.crushable } });
+    // Launch props get smooth tilted-slab colliders (voxel stair-steps would stop wheels dead).
+    const colliders = kind === 'ramp' || kind === 'mound' ? slopeColliders(kind, model.sizeX * VS, model.sizeY * VS, model.sizeZ * VS) : undefined;
+    const flat = model.sizeY <= 3;
+    const sv = this.world.addVolume('static', model, pos, rot, 'scene', {
+      destructible,
+      collide: o.solid ?? kind !== 'safePad',
+      colliders,
+      castShadow: !flat,
+      userData: { crushable: !!o.crushable },
+    });
     if (o.crushable) this.game.crushables.add(sv.id);
     return sv;
   }
@@ -120,7 +130,7 @@ export class LevelBuilder {
     const model = buildProp('tnt', this.kit);
     const g = y ?? Math.max(0, this.world.groundHeight(x, z));
     const { pos, rot } = placeModel(PROP_DIMS.tnt, x, g + 0.01, z);
-    const sv = this.world.addVolume('dynamic', model, pos, rot, 'prop', { explosive: true, body: { angularDamping: 0.6 } });
+    const sv = this.world.addVolume('dynamic', model, pos, rot, 'prop', { explosive: true, impactDetonateDv: 12, body: { angularDamping: 0.6 } });
     this.game.tnts.push({ sv, rest: [...pos], fuse: -1 });
   }
 
@@ -230,6 +240,8 @@ export class PathbreakersGame {
   private forceGaps = false;
   private assist = true;
   private walkerParked = false;
+  /** Vehicle velocities before the physics step (contact response hides impact speed afterwards). */
+  private readonly preVel = new Map<number, Vec3>();
 
   constructor(ctx: SceneContext, level: LevelDef) {
     this.ctx = ctx;
@@ -240,6 +252,7 @@ export class PathbreakersGame {
     this.hooks = {
       world: this.world,
       canWreck: (sv) => sv.destructible && sv.tag !== 'vehicle',
+      isCrushable: (sv) => this.crushables.has(sv.id),
       onHit: (_v, perVolume, at, strength) => {
         const now = this.world.time;
         if (now - this.lastHitEvent < 0.12) return;
@@ -247,7 +260,10 @@ export class PathbreakersGame {
         const id = [...perVolume.keys()][0] ?? 0;
         this.emit({ e: 'hit', id, x: at[0], y: at[1], z: at[2], strength, vehicle: this.controlled?.kind ?? null });
       },
-      onEvent: (e) => this.emit(e),
+      onEvent: (e) => {
+        this.emit(e);
+        if (e.e === 'stomp' && this.carrierLive() && this.carrier!.distanceTo([e.x, e.y, e.z]) < 1.4) this.fail('You stomped the carrier!');
+      },
       fireMissile: (from, dir, owner) => this.fireMissile(from, dir, owner),
     };
   }
@@ -387,13 +403,16 @@ export class PathbreakersGame {
   // ------------------------------------------------------------------ per-step
 
   preStep(dt: number): void {
-    const controllable = this.state === 'countdown' || this.state === 'running' || this.state === 'clear';
-    const inp = controllable ? this.input : IDLE;
-    const enterPressed = inp.enter !== this.seen.enter;
-    const resetPressed = inp.reset !== this.seen.reset;
-    const actionPressed = inp.actionCount !== this.seen.action;
-    const jumpPressed = inp.jumpCount !== this.seen.jump;
-    if (controllable) this.seen = { enter: inp.enter, reset: inp.reset, action: inp.actionCount, jump: inp.jumpCount };
+    const controllable = this.state === 'running' || this.state === 'clear';
+    const raw = this.input;
+    // Press counters are always resynced, so presses made in menus/countdowns never fire later.
+    const enterPressed = controllable && raw.enter !== this.seen.enter;
+    const resetPressed = controllable && raw.reset !== this.seen.reset;
+    const actionPressed = controllable && raw.actionCount !== this.seen.action;
+    const jumpPressed = controllable && raw.jumpCount !== this.seen.jump;
+    this.seen = { enter: raw.enter, reset: raw.reset, action: raw.actionCount, jump: raw.jumpCount };
+    const inp = controllable ? raw : IDLE;
+    for (const v of this.vehicles) if (v.sv.kind === 'dynamic') this.preVel.set(v.id, v.velocity());
 
     if (enterPressed) this.toggleVehicle();
     if (resetPressed) this.resetControlled();
@@ -445,7 +464,7 @@ export class PathbreakersGame {
       }
       case 'running':
       case 'clear':
-        this.time += dt;
+        if (this.state === 'running') this.time += dt; // the clock stops at PATH CLEAR
         for (const g of this.gaps) g.filled(); // latch pits (emits gapFilled promptly)
         this.updateTnt(dt);
         this.updatePickups(dt);
@@ -533,12 +552,12 @@ export class PathbreakersGame {
             v.toWorld([v.size[0] + 0.9, 0, v.size[2] / 2], pose),
             v.toWorld([v.size[0] / 2, 0, v.size[2] + 1.2], pose),
           ];
+    const baseY = v.kind === 'train' ? 0 : pose.pos[1];
     for (const c of candidates) {
-      const g = this.world.groundHeight(c[0], c[2]);
-      if (!Number.isFinite(g)) continue;
-      const hit = this.world.physics!.raycast([c[0], g + 3, c[2]], [0, -1, 0], 3.2, v.sv.body);
-      const y = hit ? hit.point[1] : g;
-      if (y - g < 1.5) return [c[0], y + 0.05, c[2]];
+      // First surface below, probing from just above the vehicle: must be near the vehicle's own height
+      // (next to it on the ground or on the same roof), never down inside a hollow building.
+      const hit = this.world.physics!.raycast([c[0], baseY + v.size[1] + 1.5, c[2]], [0, -1, 0], v.size[1] + 4, v.sv.body);
+      if (hit && Math.abs(hit.point[1] - baseY) < 1.6 && hit.normal[1] > 0.6) return [c[0], hit.point[1] + 0.05, c[2]];
     }
     const c = v.center();
     return [c[0], c[1] + v.size[1] / 2 + 0.5, c[2]];
@@ -585,6 +604,20 @@ export class PathbreakersGame {
     this.missiles.push({ sv, pos: [...from], vel: add(scale(d, 42), [ownerVel[0], 0, ownerVel[2]]), life: 2.5, owner: owner.sv.body });
   }
 
+  /** Inside a standing structure's footprint box (catches missiles flying through earlier holes). */
+  private insideStructure(p: Vec3): boolean {
+    for (const m of this.structs.values()) {
+      if (m.destroyed) continue;
+      const s = m.info;
+      if (Math.abs(p[0] - s.x) < s.w / 2 - 0.3 && Math.abs(p[2] - s.z) < s.d / 2 - 0.3 && p[1] > 0.2 && p[1] < s.h - 0.3) return true;
+    }
+    return false;
+  }
+
+  private carrierLive(): boolean {
+    return !!this.carrier && this.world.volumes.has(this.carrier.sv.id) && this.mode === 'mission' && (this.state === 'running' || this.state === 'clear');
+  }
+
   private moveMissiles(dt: number): void {
     for (let i = this.missiles.length - 1; i >= 0; i--) {
       const m = this.missiles[i]!;
@@ -592,15 +625,20 @@ export class PathbreakersGame {
       m.vel[1] -= 2.5 * dt;
       const step = scale(m.vel, dt);
       const hit = this.world.physics!.raycast(m.pos, step, length(step) + 0.05, m.owner);
-      if (hit || m.life <= 0 || m.pos[1] < -2) {
-        const at = hit ? hit.point : m.pos;
+      const inside = !hit && this.insideStructure(add(m.pos, step));
+      if (hit || inside || m.life <= 0 || m.pos[1] < -2) {
+        const at = hit ? hit.point : inside ? add(m.pos, step) : m.pos;
         this.world.removeVolume(m.sv.id);
         this.missiles.splice(i, 1);
-        this.world.detonate(at, 1.7, 3.2);
-        if (hit?.body !== null && hit?.body !== undefined) {
-          const sv = this.world.volumeForBody(hit.body);
-          if (sv) this.world.structures.damage(sv.id, 2500);
+        const r = this.world.detonate(at, 1.7, 3.2);
+        let credited = false;
+        for (const id of r.perVolume.keys()) {
+          if (this.structs.has(id)) {
+            this.world.structures.damage(id, 2200);
+            credited = true;
+          }
         }
+        if (credited) this.emit({ e: 'hit', id: [...r.perVolume.keys()][0] ?? 0, x: at[0], y: at[1], z: at[2], strength: r.removedVoxels, vehicle: 'bike' });
         continue;
       }
       m.pos = add(m.pos, step);
@@ -730,7 +768,22 @@ export class PathbreakersGame {
   }
 
   private gapFilled(g: GapDef): boolean {
-    return this.forceGaps || g.filled();
+    return this.forceGaps || g.latched || g.filled();
+  }
+
+  /** Locks the rail car in place once the carrier is committed to crossing (or the path is clear). */
+  private updateRailLock(carrier: Carrier): void {
+    for (const g of this.gaps) {
+      if (g.info.kind !== 'rail') continue;
+      const trains = this.vehicles.filter((v): v is Train => v instanceof Train);
+      const committed = carrier.front >= g.info.x0 - 10 && carrier.front - carrier.length <= g.info.x1 + 0.5;
+      if ((committed || this.state === 'clear') && g.filled()) g.latched = true;
+      if (g.latched && carrier.front - carrier.length > g.info.x1 + 0.5) g.latched = this.state === 'clear' ? g.latched : false;
+      for (const t of trains) {
+        t.snapZ = this.level.lane?.z ?? 0;
+        t.locked = g.latched && (committed || this.state === 'clear');
+      }
+    }
   }
 
   private updateCarrier(): void {
@@ -758,16 +811,19 @@ export class PathbreakersGame {
         return;
       }
     }
-    // Vehicles ramming it.
+    this.updateRailLock(carrier);
+    // Vehicles ramming it: test the chassis box (corners + face centers) against the hull box.
     for (const v of this.vehicles) {
       if (v.sv.kind !== 'dynamic') continue;
-      const c = v.center();
-      const r = Math.max(v.size[0], v.size[2]) / 2;
-      if (carrier.distanceTo(c) < r * 0.7) {
-        const vel = v.velocity();
+      const pose = v.originPose();
+      const [sx, sy, sz] = v.size;
+      let minD = Infinity;
+      for (const px of [0, sx / 2, sx]) for (const py of [0.3, sy / 2, sy]) for (const pz of [0, sz / 2, sz]) minD = Math.min(minD, carrier.distanceTo(v.toWorld([px, py, pz], pose)));
+      if (minD < 0.22) {
+        const vel = this.preVel.get(v.id) ?? v.velocity();
         const rel = Math.hypot(vel[0] - carrier.speed, vel[1], vel[2]);
-        if (rel > 7 || (v instanceof Mech && v.activity === 'stomping')) {
-          this.fail(v instanceof Mech ? 'You stomped the carrier!' : 'You rammed the carrier!');
+        if (rel > 5.5) {
+          this.fail('You rammed the carrier!');
           return;
         }
       }
@@ -791,6 +847,7 @@ export class PathbreakersGame {
       const gapsOk = this.gaps.every((g) => this.gapFilled(g) || carrier.front - carrier.length > g.info.x1);
       if (blockers.length === 0 && gapsOk) {
         this.setState('clear');
+        for (const gp of this.gaps) if (this.gapFilled(gp)) gp.latched = true;
         this.emit({ e: 'pathClear' });
         this.radio('pathClear');
       }
@@ -893,9 +950,9 @@ export class PathbreakersGame {
     }
     const near = !v ? this.nearestVehicle() : null;
     let prompt: string | null = null;
-    if (v) prompt = v.kind === 'semi' ? null : `Exit ${VEHICLE_NAMES[v.kind]}`;
+    if (v) prompt = v.kind === 'semi' ? null : `E  Exit ${VEHICLE_NAMES[v.kind]}`;
     if (this.state === 'clear' && !near) prompt = this.carrier?.fastForward ? 'F  Carrier fast-forwarding ▶▶' : 'F  Fast-forward the carrier · or board the COMMAND RIG';
-    else if (near) prompt = near.v.kind === 'semi' ? (this.state === 'clear' ? 'Board the COMMAND RIG — finish mission' : 'COMMAND RIG (clear the path first)') : `Enter ${VEHICLE_NAMES[near.v.kind]}`;
+    else if (near) prompt = near.v.kind === 'semi' ? (this.state === 'clear' ? 'E  Board the COMMAND RIG — finish mission' : 'COMMAND RIG (clear the path first)') : `E  Enter ${VEHICLE_NAMES[near.v.kind]}`;
     const trainAligned = this.vehicles.some((x) => x instanceof Train && Math.abs(x.deckCenterZ() - (this.level.lane?.z ?? 0)) <= 0.8);
     const heading = v ? v.heading() : this.pilotYaw;
     const vel = v ? v.velocity() : [0, 0, 0];
@@ -957,3 +1014,37 @@ export class PathbreakersGame {
 }
 
 export { yawQuat };
+
+/** Tilted-slab colliders matching the art's ramp (rising toward -z) and mound (tent with a plateau). */
+function slopeColliders(kind: 'ramp' | 'mound', w: number, h: number, d: number): BoxShape[] {
+  const t = 0.4;
+  const slab = (za: number, ya: number, zb: number, yb: number): BoxShape => {
+    const L = Math.hypot(zb - za, yb - ya);
+    const uz = (zb - za) / L, uy = (yb - ya) / L;
+    let nz = -uy, ny = uz;
+    if (ny < 0) {
+      nz = -nz;
+      ny = -ny;
+    }
+    const phi = Math.atan2(-uy, uz);
+    return {
+      cx: w / 2,
+      cy: (ya + yb) / 2 - (ny * t) / 2,
+      cz: (za + zb) / 2 - (nz * t) / 2,
+      hx: w / 2,
+      hy: t / 2,
+      hz: L / 2,
+      rot: [Math.sin(phi / 2), 0, 0, Math.cos(phi / 2)],
+      density: 1000,
+      friction: 0.9,
+      restitution: 0,
+    };
+  };
+  if (kind === 'ramp') return [slab(d, 0, 0, h)];
+  const a = 0.4 * d, b = 0.6 * d;
+  return [
+    slab(0, 0, a, h),
+    { cx: w / 2, cy: h - t / 2, cz: d / 2, hx: w / 2, hy: t / 2, hz: (b - a) / 2, density: 1000, friction: 0.9, restitution: 0 },
+    slab(b, h, d, 0),
+  ];
+}

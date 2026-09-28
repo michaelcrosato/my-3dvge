@@ -51,6 +51,8 @@ function bell(s: Synth, out: AudioNode, freq: number, t: number, decay: number, 
 
 /** Crackle grains (debris). */
 function grains(s: Synth, out: AudioNode, t: number, dur: number, count: number, peak: number, lo = 700, hi = 3200): number {
+  // Each grain builds a few nodes; cap them so a collapse can't build hundreds on the main thread.
+  count = Math.min(count, 10);
   let end = t;
   for (let i = 0; i < count; i++) {
     const at = t + Math.pow(s.random(), 1.6) * dur;

@@ -62,6 +62,7 @@ class PathbreakersClient implements GameClient {
   private flowTimer = 0;
   private screenAfter: { at: number; show: () => void } | null = null;
   private throttleHeld = 0;
+  private ignoreUnlock = false;
   private fastButton: HTMLButtonElement | null = null;
   private loading: HTMLDivElement | null = null;
 
@@ -72,13 +73,20 @@ class PathbreakersClient implements GameClient {
     engine.scene.add(this.markers.root);
     engine.hud.toggleButton.hidden = !engine.params.debug;
     engine.controls.clickAction = null;
-    this.rig.mode = this.save.settings.camera;
+    engine.controls.invertY = this.save.settings.invertY;
+    this.setCamera(this.save.settings.camera);
     this.buildTouchControls();
+    // Capture phase: menus stop propagation of their keys, but audio must unlock on the first gesture.
+    const unlock = () => this.audio.unlock();
+    window.addEventListener('pointerdown', unlock, { capture: true, passive: true });
+    window.addEventListener('keydown', unlock, { capture: true });
+    window.addEventListener('touchend', unlock, { capture: true, passive: true });
     this.ui.mount(engine.ui, this.hooks());
     this.audio.setVolumes(this.save.settings.music, this.save.settings.sfx);
-    const unlock = () => this.audio.unlock();
-    window.addEventListener('pointerdown', unlock, { once: false, passive: true });
-    window.addEventListener('keydown', unlock, { once: false });
+    document.addEventListener('pointerlockchange', () => {
+      // Esc in pointer lock is eaten by the browser: treat losing the lock mid-game as "pause".
+      if (!document.pointerLockElement && this.flow === 'playing' && !this.ignoreUnlock && !this.ui.blocking) this.pause();
+    });
     this.ui.showTitle(this.save);
     this.audio.setMusic('title', 0);
     this.installDebugHandle();
@@ -104,6 +112,7 @@ class PathbreakersClient implements GameClient {
         if (key === 'music' || key === 'sfx') this.audio.setVolumes(this.save.settings.music, this.save.settings.sfx);
         if (key === 'camera') this.setCamera(value as CameraMode);
         if (key === 'assist') this.engine.sendGame({ t: 'assist', on: value });
+        if (key === 'invertY') this.engine.controls.invertY = !!value;
       },
       toggleDebugHud: () => {
         const hud = this.engine.hud;
@@ -112,7 +121,10 @@ class PathbreakersClient implements GameClient {
       },
       copyDiagnostics: () => copyText(JSON.stringify(this.engine.diagnostics(), null, 2)),
       save: () => this.save,
-      sound: (name) => this.audio.play(name),
+      sound: (name) => {
+        this.audio.unlock();
+        this.audio.play(name);
+      },
     };
   }
 
@@ -120,7 +132,25 @@ class PathbreakersClient implements GameClient {
     this.engine.sendGame(msg);
   }
 
+  private releasePointer(): void {
+    if (document.pointerLockElement) {
+      this.ignoreUnlock = true;
+      document.exitPointerLock();
+      setTimeout(() => (this.ignoreUnlock = false), 100);
+    }
+  }
+
+  private resetInputState(): void {
+    this.counters.enter = this.counters.reset = this.counters.action = this.counters.jump = 0;
+    this.actionWas = this.jumpWas = false;
+    this.audio.setLoop('slide', false);
+    this.audio.setLoop('thrust', false);
+    this.audio.setLoop('fuse', false);
+  }
+
   private startLevel(level: LevelId, mode: ModeId, quick: boolean): void {
+    this.resetInputState();
+    this.releasePointer();
     this.pending = { level, mode, quick };
     this.mode = mode;
     this.currentLevel = level;
@@ -146,12 +176,14 @@ class PathbreakersClient implements GameClient {
   private showBriefing(): void {
     if (!this.level || !this.pending) return;
     this.flow = 'briefing';
+    this.engine.setPaused(true); // nothing to simulate behind the briefing
     this.ui.showBriefing(this.level, this.pending.mode, this.save);
     this.audio.setMusic(this.level.level === 'quarry' ? 'bonus' : 'title', 0);
   }
 
   private beginMission(): void {
     this.ui.hideScreens();
+    this.engine.setPaused(false);
     this.send({ t: 'start', mode: this.mode });
     this.send({ t: 'assist', on: this.save.settings.assist } as unknown as ClientMessage);
     this.flow = 'playing';
@@ -163,6 +195,10 @@ class PathbreakersClient implements GameClient {
 
   private pause(): void {
     if (this.flow !== 'playing') return;
+    this.releasePointer();
+    this.audio.setLoop('slide', false);
+    this.audio.setLoop('thrust', false);
+    this.audio.setLoop('fuse', false);
     this.flow = 'paused';
     this.engine.setPaused(true);
     this.ui.showPause();
@@ -178,6 +214,8 @@ class PathbreakersClient implements GameClient {
   }
 
   private quitToTitle(): void {
+    this.resetInputState();
+    this.releasePointer();
     this.engine.setPaused(false);
     this.pending = null;
     this.flow = 'title';
@@ -201,7 +239,7 @@ class PathbreakersClient implements GameClient {
     this.save.settings.camera = mode;
     writeSave(this.save);
     this.engine.controls.pointerLockEnabled = mode === 'chase' || mode === 'cockpit' || mode === 'overhead';
-    if (!this.engine.controls.pointerLockEnabled && document.pointerLockElement) document.exitPointerLock();
+    if (!this.engine.controls.pointerLockEnabled) this.releasePointer();
   }
 
   // ---------------------------------------------------------------- touch
@@ -234,11 +272,14 @@ class PathbreakersClient implements GameClient {
   onReady(): void {
     this.rig.cut();
     this.send({ t: 'hello' } as unknown as ClientMessage);
+    if (this.flow === 'title') this.engine.setPaused(true); // the title backdrop needs no simulation
   }
 
   onMessage(data: unknown): void {
     const msg = data as SimMessage;
     if (msg.k === 'static') {
+      // Ignore the duplicate answer to 'hello' once the level is known.
+      if (this.level && this.level.level === msg.data.level && this.flow !== 'loading') return;
       this.level = msg.data;
       this.rig.level = msg.data;
       this.ui.setLevel(msg.data);
@@ -299,6 +340,10 @@ class PathbreakersClient implements GameClient {
         break;
       case 'dish':
         sfx('dish');
+        if (this.currentLevel === 'cinder' && e.n === e.total && !this.save.unlocked.quarry) {
+          this.save.unlocked.quarry = true;
+          writeSave(this.save);
+        }
         break;
       case 'enter':
         sfx('enter');
@@ -341,11 +386,7 @@ class PathbreakersClient implements GameClient {
       case 'turbo':
         sfx('turbo');
         break;
-      case 'slide':
-        this.audio.setLoop('slide', e.on);
-        break;
       case 'thrust':
-        this.audio.setLoop('thrust', e.on);
         if (e.on) sfx('thrustStart');
         break;
       case 'horn':
@@ -368,6 +409,7 @@ class PathbreakersClient implements GameClient {
         this.rig.setScript('fail', new THREE.Vector3(e.x, e.y, e.z));
         this.rig.shake(1.6);
         this.flow = 'failed';
+        this.releasePointer();
         this.audio.setMusic('none', 0);
         this.audio.setAlarm(0);
         this.audio.setEngine(null, 0, 0);
@@ -380,6 +422,7 @@ class PathbreakersClient implements GameClient {
         const before = JSON.parse(JSON.stringify(this.save)) as SaveData;
         recordResults(this.save, r);
         this.flow = 'results';
+        this.releasePointer();
         this.audio.setAlarm(0);
         this.audio.setEngine(null, 0, 0);
         this.audio.setMusic('results', 0);
@@ -404,12 +447,13 @@ class PathbreakersClient implements GameClient {
       else if (a === 'pause') this.pause();
       else if (a === 'fast') this.send({ t: 'fastForward', on: !this.snap?.carrier?.fastForward });
     }
-    if (this.snap?.state === 'flyover' && (c.keyPressed('Enter') || c.keyPressed('Space') || gp.pressed.has('a') || gp.pressed.has('start'))) this.send({ t: 'skipFlyover' });
+    const skipped = this.snap?.state === 'flyover' && (c.keyPressed('Enter') || c.keyPressed('Space') || gp.pressed.has('a') || gp.pressed.has('start'));
+    if (skipped) this.send({ t: 'skipFlyover' });
     if (c.keyPressed('KeyE') || gp.pressed.has('y')) this.counters.enter++;
     if (c.keyPressed('KeyR') || gp.pressed.has('b')) this.counters.reset++;
     if (c.keyPressed('KeyC') || gp.pressed.has('back')) this.cycleCamera();
-    if (c.keyPressed('Escape') || c.keyPressed('KeyP') || gp.pressed.has('start')) this.pause();
-    if (c.keyPressed('KeyF')) this.send({ t: 'fastForward', on: !this.snap?.carrier?.fastForward });
+    if (!skipped && (c.keyPressed('Escape') || c.keyPressed('KeyP') || gp.pressed.has('start'))) this.pause();
+    if (c.keyPressed('KeyF') || gp.pressed.has('up')) this.send({ t: 'fastForward', on: !this.snap?.carrier?.fastForward });
     if (this.rig.mode === 'iso') {
       if (c.keyPressed('KeyZ') || gp.pressed.has('left')) this.rig.isoTurns--;
       if (c.keyPressed('KeyX') || gp.pressed.has('right')) this.rig.isoTurns++;
@@ -484,7 +528,11 @@ class PathbreakersClient implements GameClient {
       } else {
         this.target.pos.set(snap.player.x, snap.player.y, snap.player.z);
       }
-      this.target.heading = snap.player.heading;
+      if (!snap.player.onFoot && snap.player.vehicle !== 'train') {
+        // Smooth per-frame heading from the interpolated pose (the snapshot is only 10 Hz).
+        this.projV.set(0, 0, -1).applyQuaternion(this.tmpQ);
+        this.target.heading = Math.atan2(-this.projV.x, -this.projV.z);
+      } else this.target.heading = snap.player.heading;
       this.target.vehicle = snap.player.vehicle;
       this.target.speed = snap.player.speed;
       if (snap.carrier && engine.slotPose(snap.carrier.slot, this.carrierPos, this.tmpQ)) {
@@ -504,7 +552,7 @@ class PathbreakersClient implements GameClient {
     if (this.rig.script === 'play' && this.rig.mode !== 'cockpit' && snap?.player.onFoot === false) engine.controls.yaw = this.rig.yaw;
     const ground = engine.world.volumes.size ? 0 : 0;
     if (engine.camera.position.y < ground + 0.8 && this.rig.mode !== 'cockpit') engine.camera.position.y = ground + 0.8;
-    engine.setViewOffset(this.rig.script === 'title' ? 90 : this.rig.distance());
+    engine.setViewOffset(this.rig.script === 'title' ? 45 : this.rig.distance());
     engine.shadowFocus = this.rig.script === 'play' ? this.target.pos : null;
 
     this.markers.update(snap, dt);
@@ -525,9 +573,13 @@ class PathbreakersClient implements GameClient {
       a.setMusic(this.currentLevel === 'quarry' ? 'bonus' : 'mission', tension);
       this.fuses = this.fuses.map((f) => f - dt).filter((f) => f > 0);
       a.setLoop('fuse', this.fuses.length > 0);
+      a.setLoop('slide', snap.player.activity === 'sliding');
+      a.setLoop('thrust', snap.player.activity === 'flying');
     } else {
       a.setEngine(null, 0, 0);
       a.setLoop('fuse', false);
+      a.setLoop('slide', false);
+      a.setLoop('thrust', false);
       a.setCarrier(999, false);
     }
     a.update(dt);
@@ -538,8 +590,10 @@ class PathbreakersClient implements GameClient {
     const cam = engine.camera;
     const w = window.innerWidth, h = window.innerHeight;
     const project = (x: number, y: number, z: number) => {
-      this.projV.set(x, y, z).project(cam);
-      return { x: (this.projV.x * 0.5 + 0.5) * w, y: (-this.projV.y * 0.5 + 0.5) * h, visible: this.projV.z < 1 && this.projV.z > -1 };
+      this.projV.set(x, y, z).applyMatrix4(cam.matrixWorldInverse);
+      const behind = this.projV.z > 0;
+      this.projV.applyMatrix4(cam.projectionMatrix);
+      return { x: (this.projV.x * 0.5 + 0.5) * w, y: (-this.projV.y * 0.5 + 0.5) * h, visible: !behind };
     };
     this.ui.update(this.flow === 'title' ? null : snap, dt, project, { mode: this.rig.mode, yaw: this.rig.yaw });
   }

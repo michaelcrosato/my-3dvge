@@ -2205,3 +2205,20 @@
     background-position: 40px 0;
   }
 }
+
+/* ---- client additions: fast-forward button, hide touch controls behind menus, prompt wrapping ---- */
+:is(#ui, .pb-game) .touch-btn.pb-fast {
+  right: calc(170px + var(--pb-sr));
+  border-color: var(--pb-yellow);
+}
+
+.pb-game.pb-blocking .touch-top,
+.pb-game.pb-blocking .touch-buttons {
+  display: none;
+}
+
+.pb-prompt {
+  max-width: calc(100vw - 24px);
+  white-space: normal;
+  text-align: center;
+}

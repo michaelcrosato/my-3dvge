@@ -208,8 +208,8 @@ export class Screens {
     for (const line of [
       'CARRIER MEDAL — gold when the carrier reaches the Safe Zone.',
       'COMPLETION MEDAL — buildings, survivors (8), RDU beacons (100) and satellite dishes (2): gold at 100%, silver at 75%, bronze at 40%.',
-      'TIME ATTACK — after your first clear. Only lane buildings count; beat bronze 2:30 … platinum 1:00.',
-      'BONUS: QUARRY RUMBLE — find both satellite dishes to unlock. Flatten 12 targets against the clock.',
+      'TIME ATTACK — after your first clear. Only lane buildings count; beat bronze 3:30 · silver 2:50 · gold 2:20 · platinum 1:50.',
+      'BONUS: QUARRY RUMBLE — find both satellite dishes (or clear Cinder Flats) to unlock. Flatten 12 targets: bronze 2:30 … platinum 1:00.',
     ]) obj.append(el('li', '', line));
     body.append(obj);
 

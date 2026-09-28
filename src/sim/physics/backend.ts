@@ -25,6 +25,10 @@ export interface BoxShape {
   /** Explicit mass properties (e.g. a low center of mass for vehicles). */
   mass?: { mass: number; com: Vec3; inertia: Vec3 };
   sensor?: boolean;
+  /** Box rotation in body space (e.g. tilted ramp slabs). */
+  rot?: Quat;
+  /** Use the lower of the two friction coefficients in contacts (slippery, e.g. a jet mech on walls). */
+  frictionMin?: boolean;
 }
 
 export interface BodyOptions {

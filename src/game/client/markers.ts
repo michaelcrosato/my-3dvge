@@ -51,8 +51,12 @@ export class Markers {
   }
 
   setLevel(level: LevelStatic): void {
-    this.rduOff?.removeFromParent();
-    this.rduOn?.removeFromParent();
+    for (const m of [this.rduOff, this.rduOn]) {
+      if (!m) continue;
+      m.geometry.dispose();
+      m.dispose();
+      m.removeFromParent();
+    }
     this.rdus = level.rdus ?? [];
     this.lit.clear();
     const kit = createArtKit(this.palette, () => 0.5);

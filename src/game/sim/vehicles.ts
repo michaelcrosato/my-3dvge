@@ -8,7 +8,7 @@
 import type { Quat, Vec3 } from '../../shared/protocol.ts';
 import { add, cross, length, quatRotate, scale, sub } from '../../shared/math.ts';
 import { carve, querySolid, type CarveShape } from '../../sim/destruction.ts';
-import type { WheelControl } from '../../sim/physics/backend.ts';
+import type { BoxShape, WheelControl } from '../../sim/physics/backend.ts';
 import type { SimVolume, SimWorld } from '../../sim/world.ts';
 import { SLOT_FLOATS } from '../../shared/transforms.ts';
 import type { MeterInfo, VehicleKind } from '../shared/types.ts';
@@ -35,6 +35,8 @@ export interface VehicleHooks {
   world: SimWorld;
   /** Volumes a vehicle is allowed to wreck (structures, props) — never vehicles or the carrier. */
   canWreck(sv: SimVolume): boolean;
+  /** Soft props (fences, hay, bushes) that any vehicle flattens on contact. */
+  isCrushable(sv: SimVolume): boolean;
   onHit(v: Vehicle, removedByVolume: Map<number, number>, at: Vec3, strength: number): void;
   onEvent(e: { e: 'turbo' } | { e: 'horn' } | { e: 'slide'; on: boolean } | { e: 'thrust'; on: boolean } | { e: 'land'; strength: number } | { e: 'fire'; x: number; y: number; z: number } | { e: 'stomp'; x: number; y: number; z: number }): void;
   fireMissile(from: Vec3, dir: Vec3, owner: Vehicle): void;
@@ -52,6 +54,7 @@ export abstract class Vehicle {
   /** Active damage zone this step (for the client's highlight). */
   zone: { center: Vec3; half: Vec3; yaw: number } | null = null;
   protected flippedTime = 0;
+  private crushTick = 0;
 
   constructor(hooks: VehicleHooks, kind: VehicleKind, sv: SimVolume) {
     this.hooks = hooks;
@@ -115,14 +118,47 @@ export abstract class Vehicle {
   /** Called after physics each step (damage zones, landing checks). */
   afterStep(_dt: number): void {}
 
-  /** Puts the vehicle back on its wheels (manual reset or auto-recovery). */
+  /**
+   * Nearest spot (x, y, z) where the vehicle's footprint rests on open ground: not over a pit or the rail
+   * cut, not on or inside a building. Searches outward in rings.
+   */
+  protected safeSpot(x: number, z: number): Vec3 {
+    const w = this.world;
+    const r = Math.max(this.size[0], this.size[2]) / 2 + 0.3;
+    const surface = (px: number, pz: number): number | null => {
+      const hit = w.physics!.raycast([px, 40, pz], [0, -1, 0], 60, this.sv.body);
+      return hit ? hit.point[1] : null;
+    };
+    const ok = (px: number, pz: number): number | null => {
+      for (const [dx, dz] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r], [r * 0.7, r * 0.7], [-r * 0.7, -r * 0.7], [r * 0.7, -r * 0.7], [-r * 0.7, r * 0.7]] as const) {
+        const g = w.groundHeight(px + dx, pz + dz);
+        if (!Number.isFinite(g) || g < -0.05) return null;
+      }
+      const y = surface(px, pz);
+      return y !== null && y < 0.8 ? y : null;
+    };
+    const here = ok(x, z);
+    if (here !== null) return [x, here, z];
+    for (let ring = 1; ring <= 24; ring++) {
+      const d = ring * 0.6;
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        const px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d;
+        const y = ok(px, pz);
+        if (y !== null) return [px, y, pz];
+      }
+    }
+    return [x, Math.max(0, w.groundHeight(x, z)), z];
+  }
+
+  /** Puts the vehicle back on its wheels (manual reset or auto-recovery) on safe ground nearby. */
   reset(): void {
     const w = this.world;
     if (this.sv.kind !== 'dynamic' || !w.physics) return;
     const c = this.center();
     const yaw = this.heading();
-    const g = Math.max(0, w.groundHeight(c[0], c[2]));
-    const { pos, rot } = placeModel(VEHICLE_DIMS[this.kind], c[0], g + 0.6, c[2], yaw);
+    const [x, y, z] = this.safeSpot(c[0], c[2]);
+    const { pos, rot } = placeModel(VEHICLE_DIMS[this.kind], x, y + 0.6, z, yaw);
     w.physics.setPose(this.sv.body, pos, rot, true);
   }
 
@@ -133,14 +169,23 @@ export abstract class Vehicle {
     const shape: CarveShape = { kind: 'box', center, half, rotation: pose.rot };
     this.zone = { center, half, yaw: yawOf(pose.rot) };
     const filter = (sv: SimVolume) => sv.kind === 'static' && this.hooks.canWreck(sv);
-    const probe = querySolid(world, shape, filter);
-    if (probe.count === 0) return 0;
     const r = carve(world, shape, power, { filter, particleChance: 0.12 });
     if (r.removedVoxels > 0) {
       for (const [id, n] of r.perVolume) world.structures.damage(id, n * damageMul);
-      this.hooks.onHit(this, r.perVolume, probe.centroid, r.removedVoxels);
+      this.hooks.onHit(this, r.perVolume, center, r.removedVoxels);
     }
     return r.removedVoxels;
+  }
+
+  /** Flattens fences, hay and bushes the vehicle is touching (any speed). */
+  protected crushSoftProps(): void {
+    if (this.crushTick++ % 3 !== 0) return;
+    const pose = this.originPose();
+    const [sx, sy, sz] = this.size;
+    carve(this.world, { kind: 'box', center: this.toWorld([sx / 2, sy / 2, sz / 2], pose), half: [sx / 2 + 0.35, sy / 2 + 0.2, sz / 2 + 0.35], rotation: pose.rot }, 10, {
+      filter: (sv) => this.hooks.isCrushable(sv),
+      particleChance: 0.25,
+    });
   }
 
   /** Auto-recovery when stuck on its roof/side. */
@@ -326,6 +371,7 @@ export class WheeledVehicle extends Vehicle {
 
   override afterStep(dt: number): void {
     this.zone = null;
+    this.crushSoftProps();
     const air = !this.contacts.some(Boolean);
     if (air) this.airTime += dt;
     else {
@@ -354,12 +400,10 @@ export class Dozer extends WheeledVehicle {
     this.activity = null;
     const speed = this.speed();
     this.tick++;
-    // Ramming at speed bites hard; pushing against a wall at full throttle grinds through slowly.
-    const ramming = speed > 1.2 && this.tick % 2 === 0;
-    const grinding = !ramming && this.throttle > 0.4 && this.tick % 7 === 0;
-    if (ramming || grinding) {
-      const [w] = this.size;
-      const removed = this.wreckBox([w / 2, 0.95, -0.3], [1.55, 0.8, grinding ? 0.55 : 0.5], 2.2, ramming ? 4 + speed * 0.4 : 2);
+    const [w] = this.size;
+    // The blade zone covers the whole chassis height (0.15–2.25 m) so no uncut lintel can jam it.
+    if (speed > 1.2 && this.tick % 2 === 0) {
+      const removed = this.wreckBox([w / 2, 1.2, -0.3], [1.75, 1.05, 0.5], 2.2, 4 + speed * 0.4);
       if (removed > 0) {
         this.activity = 'ramming';
         const physics = this.world.physics!;
@@ -367,6 +411,14 @@ export class Dozer extends WheeledVehicle {
         const f = Math.max(0.55, 1 - removed / 3000);
         physics.setLinvel(this.sv.body, [v[0] * f, v[1], v[2] * f]);
       }
+    } else if (this.throttle > 0.4 && Math.abs(speed) < 0.8) {
+      // Pushing against a wall at full throttle grinds it: occasional bites plus steady wear.
+      const pose = this.originPose();
+      if (this.tick % 6 === 0) this.wreckBox([w / 2, 1.2, -0.4], [1.75, 1.05, 0.6], 2.2, 3, pose);
+      const center = this.toWorld([w / 2, 1.2, -0.45], pose);
+      const probe = querySolid(this.world, { kind: 'box', center, half: [1.75, 1.05, 0.6], rotation: pose.rot }, (sv) => sv.kind === 'static' && this.hooks.canWreck(sv));
+      for (const sv of probe.byVolume.keys()) this.world.structures.damage(sv.id, 900 * dt);
+      if (probe.count > 0) this.activity = 'grinding';
     }
   }
 }
@@ -401,7 +453,7 @@ export class Truck extends WheeledVehicle {
     const pose = this.originPose();
     const v = physics.linvel(this.sv.body);
     const w = physics.angvel(this.sv.body);
-    const rearLocal: Vec3 = [this.size[0] / 2, 1.2, this.size[2] + 0.3];
+    const rearLocal: Vec3 = [this.size[0] / 2, 1.3, this.size[2] + 0.3];
     const rearWorld = this.toWorld(rearLocal, pose);
     const com = physics.centerOfMass(this.sv.body);
     const rearVel = add(v, cross(w, sub(rearWorld, com)));
@@ -410,10 +462,10 @@ export class Truck extends WheeledVehicle {
     const lateral = Math.abs(rearVel[0] * right[0] + rearVel[2] * right[2]);
     const backward = rearVel[0] * back[0] + rearVel[2] * back[2];
     if ((this.sliding && lateral > 2.2) || backward > 3.5 || (this.airTime > 0.3 && length(v) > 7)) {
-      const removed = this.wreckBox(rearLocal, [1.45, 1.0, 0.6], 3.3, 7, pose);
+      const removed = this.wreckBox(rearLocal, [1.45, 1.15, 0.6], 3.3, 7, pose);
       if (removed > 0) physics.setLinvel(this.sv.body, scale(v, Math.max(0.55, 1 - removed / 4000)));
     } else if (this.sliding) {
-      this.zone = { center: rearWorld, half: [1.45, 1.0, 0.55], yaw: yawOf(pose.rot) };
+      this.zone = { center: rearWorld, half: [1.45, 1.15, 0.6], yaw: yawOf(pose.rot) };
     }
   }
 }
@@ -497,9 +549,9 @@ export class Mech extends Vehicle {
   private thrusting = false;
   private lastVy = 0;
 
-  static colliders(): { hx: number; hy: number; hz: number; cx: number; cy: number; cz: number; density: number; friction: number; restitution: number; mass: { mass: number; com: Vec3; inertia: Vec3 } }[] {
+  static colliders(): BoxShape[] {
     const [w, h, l] = VEHICLE_DIMS.mech.map((v) => v * VS) as [number, number, number];
-    return [{ cx: w / 2, cy: h / 2 + 0.05, cz: l / 2, hx: w / 2 - 0.1, hy: h / 2 - 0.05, hz: l / 2 - 0.1, density: 0, friction: 0.2, restitution: 0, mass: { mass: 2500, com: [0, -0.4, 0], inertia: [2500, 2500, 2500] } }];
+    return [{ cx: w / 2, cy: h / 2 + 0.05, cz: l / 2, hx: w / 2 - 0.1, hy: h / 2 - 0.05, hz: l / 2 - 0.1, density: 0, friction: 0, frictionMin: true, restitution: 0, mass: { mass: 2500, com: [0, -0.4, 0], inertia: [2500, 2500, 2500] } }];
   }
 
   override meter(): MeterInfo {
@@ -526,8 +578,22 @@ export class Mech extends Vehicle {
     const m = Math.min(1, Math.hypot(dx, dz));
     const maxH = this.grounded ? 5.5 : 9;
     const k = Math.min(1, dt * (this.grounded ? 10 : 2.5));
-    const tvx = m > 0.05 ? (dx / (Math.hypot(dx, dz) || 1)) * m * maxH : 0;
-    const tvz = m > 0.05 ? (dz / (Math.hypot(dx, dz) || 1)) * m * maxH : 0;
+    let tvx = m > 0.05 ? (dx / (Math.hypot(dx, dz) || 1)) * m * maxH : 0;
+    let tvz = m > 0.05 ? (dz / (Math.hypot(dx, dz) || 1)) * m * maxH : 0;
+    let wallAhead = false;
+    if (m > 0.05) {
+      // Slide along walls instead of pressing into them (so thrusting up a wall works).
+      const len = Math.hypot(tvx, tvz);
+      const wall = physics.raycast([c[0], c[1], c[2]], [tvx / len, 0, tvz / len], Math.max(this.size[0], this.size[2]) / 2 + 0.5, body);
+      if (wall && Math.abs(wall.normal[1]) < 0.5) {
+        const dot = tvx * wall.normal[0] + tvz * wall.normal[2];
+        if (dot < 0) {
+          tvx -= wall.normal[0] * dot;
+          tvz -= wall.normal[2] * dot;
+          wallAhead = true;
+        }
+      }
+    }
     let vy = v[1];
     let vx = v[0] + (tvx - v[0]) * k;
     let vz = v[2] + (tvz - v[2]) * k;
@@ -535,7 +601,7 @@ export class Mech extends Vehicle {
     // Thrusters.
     const thrust = !!intent?.jump && this.fuel > 0.02 && !this.stomping;
     if (thrust) {
-      vy = Math.min(8, vy + (9.81 + 7) * dt);
+      vy = Math.min(8, vy + (9.81 + 7 + (wallAhead ? 3 : 0)) * dt);
       this.fuel = Math.max(0, this.fuel - dt * 0.28);
     } else if (this.grounded) {
       this.fuel = Math.min(1, this.fuel + dt * 0.45);
@@ -586,6 +652,7 @@ export class Mech extends Vehicle {
 
   override afterStep(): void {
     this.zone = null;
+    this.crushSoftProps();
     const physics = this.world.physics!;
     const v = physics.linvel(this.sv.body);
     if (this.stomping) {
@@ -610,8 +677,8 @@ export class Mech extends Vehicle {
 
   override reset(): void {
     const c = this.center();
-    const g = Math.max(0, this.world.groundHeight(c[0], c[2]));
-    const { pos } = placeModel(VEHICLE_DIMS.mech, c[0], g + 0.2, c[2], this.heading());
+    const [x, y, z] = this.safeSpot(c[0], c[2]);
+    const { pos } = placeModel(VEHICLE_DIMS.mech, x, y + 0.2, z, this.heading());
     this.world.physics!.setPose(this.sv.body, pos, yawQuat(this.heading()), true);
     this.stomping = false;
   }
@@ -624,6 +691,10 @@ export class Train extends Vehicle {
   readonly track: { x: number; y: number; z0: number; z1: number };
   /** z of the car's front (model z = 0). */
   s: number;
+  /** Lane z the flatbed snaps to when stopped close to it (set by the game). */
+  snapZ: number | null = null;
+  /** Locked in place (the carrier is crossing). */
+  locked = false;
   private vel = 0;
 
   constructor(hooks: VehicleHooks, sv: SimVolume, track: { x: number; y: number; z0: number; z1: number }, s: number) {
@@ -652,9 +723,19 @@ export class Train extends Vehicle {
   drive(intent: DriveIntent | null, dt: number): void {
     // Forward (W / stick up) runs toward -z, the locomotive's facing; relative modes use world z directly.
     let t = 0;
-    if (intent) t = intent.dir ? clamp(intent.dir[1], -1, 1) : -intent.throttle;
-    this.vel += t * 3.2 * dt;
-    if (Math.abs(t) < 0.05) this.vel *= Math.max(0, 1 - dt * 1.6);
+    if (intent && !this.locked) t = intent.dir ? clamp(intent.dir[1], -1, 1) : -intent.throttle;
+    if (!intent || this.locked) this.vel = 0;
+    else if (Math.abs(t) < 0.05) {
+      // Brakes, and a gentle "magnetic" stop when the flatbed is nearly lined up with the lane.
+      this.vel -= Math.sign(this.vel) * Math.min(Math.abs(this.vel), 8 * dt);
+      if (this.snapZ !== null) {
+        const off = this.snapZ - this.deckCenterZ();
+        if (Math.abs(off) < 1.2 && Math.abs(this.vel) < 3) {
+          this.vel = 0;
+          this.s += off * Math.min(1, dt * 6);
+        }
+      }
+    } else this.vel += t * 3.2 * dt;
     this.vel = clamp(this.vel, -7, 7);
     const len = VEHICLE_DIMS.train[2] * VS;
     const next = clamp(this.s + this.vel * dt, this.track.z0, this.track.z1 - len);

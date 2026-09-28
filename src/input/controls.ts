@@ -32,6 +32,8 @@ export class Controls {
   mouseSensitivity = 0.0022;
   touchSensitivity = 0.0065;
   gamepadLookSpeed = 2.6;
+  /** Invert vertical look (mouse, touch drag, right stick). */
+  invertY = false;
   /** Action pushed on a pointer-locked left click (null: none — read isKeyDown('Mouse0') instead). */
   clickAction: Action | null = 'blast';
   /** Whether clicking the canvas requests pointer lock. */
@@ -198,6 +200,7 @@ export class Controls {
   }
 
   private rotate(dx: number, dy: number): void {
+    if (this.invertY) dy = -dy;
     this.yaw -= dx;
     this.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, this.pitch - dy));
   }

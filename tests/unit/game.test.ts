@@ -142,4 +142,67 @@ describe('PATHBREAKERS rules', () => {
     expect(g.events().filter((e) => e.e === 'explosion').length).toBeGreaterThan(0);
     expect(w.volumes.has(tnt.id)).toBe(false);
   });
+
+  it('PLOWHORSE brings the barn all the way down in time (repeated rams from the spawn)', async () => {
+    const g = await boot('cinder');
+    g.send({ t: 'start', mode: 'timeAttack' });
+    g.send({ t: 'skipFlyover' });
+    g.run(3.2);
+    g.send({ t: 'input', input: g.input({ enter: 1 }) });
+    g.run(0.1);
+    // Aim at the barn's center line and hold full throttle (camera-relative: +x).
+    for (let i = 0; i < 25 * 60 && !g.events().some((e) => e.e === 'collapse' && e.name === 'BARN'); i++) {
+      const p = g.snap().player;
+      const steer = Math.max(-1, Math.min(1, (p.z - 0.4) * 0.4)); // + forward = toward -z
+      g.send({ t: 'input', input: g.input({ enter: 1, relative: true, move: [1, steer] }) });
+      g.world.step(1 / 60);
+    }
+    expect(g.events().some((e) => e.e === 'collapse' && e.name === 'BARN')).toBe(true);
+  });
+
+  it('SKYLARK launches off the ramp', async () => {
+    const g = await boot('cinder');
+    g.send({ t: 'start', mode: 'timeAttack' });
+    g.send({ t: 'skipFlyover' });
+    g.run(3.2);
+    const buggy = [...g.world.volumes.values()].find((v) => v.tag === 'vehicle' && v.volume.sizeX === 20 && v.volume.sizeZ === 34)!;
+    g.world.physics!.setPose(buggy.body, [80 - 1, 0.4, 38], [0, 0, 0, 1], true);
+    g.world.player!.teleport([77, 0, 40]);
+    g.run(0.3);
+    g.send({ t: 'input', input: g.input({ enter: 1 }) });
+    g.run(0.1);
+    expect(g.snap().player.vehicle).toBe('buggy');
+    g.send({ t: 'input', input: g.input({ enter: 1, move: [0, 1] }) });
+    let air = false;
+    for (let i = 0; i < 6 * 60 && !air; i++) {
+      g.world.step(1 / 60);
+      air = g.snap().player.activity === 'airborne' || g.events().some((e) => e.e === 'land');
+    }
+    expect(air).toBe(true);
+  });
+
+  it('ramming the carrier at speed fails the mission; finishing does not flood events', async () => {
+    const g = await boot('cinder');
+    g.send({ t: 'start', mode: 'mission' });
+    g.send({ t: 'skipFlyover' });
+    g.run(3.2);
+    const w = g.world;
+    const dozer = [...w.volumes.values()].find((v) => v.tag === 'vehicle' && v.volume.sizeX === 30 && v.volume.sizeZ === 46)!;
+    // Dozer north of the carrier, facing south (+z), full throttle into its side.
+    const cx = g.snap().carrier!.x;
+    // Lead the target: the carrier rolls ~4 m while the dozer crosses the gap.
+    w.physics!.setPose(dozer.body, [cx + 5.5, 0.4, -9], [0, 1, 0, 0], true);
+    w.player!.teleport([cx + 3, 0, -8]);
+    g.run(0.3);
+    g.send({ t: 'input', input: g.input({ enter: 1 }) });
+    g.run(0.1);
+    g.send({ t: 'input', input: g.input({ enter: 1, move: [0, 1] }) });
+    g.run(4);
+    expect(g.snap().state).toBe('failed');
+    const reason = g.events().find((e) => e.e === 'fail');
+    expect(reason && 'reason' in reason ? reason.reason : '').toMatch(/rammed/);
+    const before = g.events().length;
+    g.run(2);
+    expect(g.events().length - before).toBeLessThan(10); // no per-step enter/exit or radio spam
+  });
 });

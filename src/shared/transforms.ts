@@ -6,7 +6,7 @@
  * The writer never touches those two slots while producing f+1, so reads are tear-free. Without
  * isolation the worker posts each frame's Float32Array instead (same reader API).
  *
- * Per body slot: px, py, pz, qx, qy, qz, qw, (unused).
+ * Per body slot: px, py, pz, qx, qy, qz, qw, owner volume id (0 = player / none).
  */
 export const SLOT_FLOATS = 8;
 /** Transform slots shared with the renderer; slot 0 is the player. */
@@ -128,7 +128,8 @@ export function interpolateSlot(sample: TransformSample, s: number, pos: { set(x
   const o = s * SLOT_FLOATS;
   const a = sample.prev, b = sample.curr, t = sample.alpha;
   if (b.length <= o + 6) return;
-  const pa = a.length > o + 6 ? a : b;
+  // Snap (no interpolation) when the slot changed owner between the two frames.
+  const pa = a.length > o + 7 && a[o + 7] === b[o + 7] ? a : b;
   pos.set(pa[o]! + (b[o]! - pa[o]!) * t, pa[o + 1]! + (b[o + 1]! - pa[o + 1]!) * t, pa[o + 2]! + (b[o + 2]! - pa[o + 2]!) * t);
   let qx = pa[o + 3]!, qy = pa[o + 4]!, qz = pa[o + 5]!, qw = pa[o + 6]!;
   const bx = b[o + 3]!, by = b[o + 4]!, bz = b[o + 5]!, bw = b[o + 6]!;

@@ -53,7 +53,7 @@ export function parseParams(search: string): Params {
     renderer: oneOf(q.get('renderer'), ['auto', 'webgpu', 'webgl'] as const) ?? DEFAULT_PARAMS.renderer,
     quality: oneOf(q.get('quality'), QUALITY_NAMES) ?? DEFAULT_PARAMS.quality,
     scene: oneOf(q.get('scene'), SCENE_NAMES) ?? DEFAULT_PARAMS.scene,
-    maxBodies: positiveInt(q.get('maxBodies'), 1, 2000) ?? DEFAULT_PARAMS.maxBodies,
+    maxBodies: positiveInt(q.get('maxBodies'), 1, 1500) ?? DEFAULT_PARAMS.maxBodies,
     bench: flag(q.get('bench')) ?? DEFAULT_PARAMS.bench,
     benchTime: positiveInt(q.get('benchTime'), 5, 3600) ?? DEFAULT_PARAMS.benchTime,
     debug: flag(q.get('debug')) ?? DEFAULT_PARAMS.debug,

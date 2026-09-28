@@ -93,6 +93,8 @@ export class RapierBackend implements PhysicsBackend {
         desc.setDensity(b.density);
       }
       if (b.sensor) desc.setSensor(true);
+      if (b.rot) desc.setRotation({ x: b.rot[0], y: b.rot[1], z: b.rot[2], w: b.rot[3] });
+      if (b.frictionMin) desc.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min);
       list.push(this.world.createCollider(desc, body));
     }
     const g = this.nextGroup++;

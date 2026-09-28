@@ -44,6 +44,8 @@ const lastStaticDetonation = new WeakMap<SimVolume, number>();
 interface LocalShape {
   center: Vec3; // voxel units, volume-local
   bound: number; // bounding radius, voxel units
+  /** Per-axis half extent of the shape's local AABB (voxel units). */
+  ext: Vec3;
   sphereR: number;
   axes: Vec3[] | null;
   half: Vec3;
@@ -54,20 +56,21 @@ function localShape(shape: CarveShape, pos: Vec3, rot: Quat): LocalShape {
   const center = scale(quatRotate(inv, sub(shape.center, pos)), 1 / VOXEL_SIZE);
   if (shape.kind === 'sphere') {
     const r = shape.radius / VOXEL_SIZE;
-    return { center, bound: r, sphereR: r, axes: null, half: [r, r, r] };
+    return { center, bound: r, ext: [r, r, r], sphereR: r, axes: null, half: [r, r, r] };
   }
   const half = scale(shape.half, 1 / VOXEL_SIZE);
   const axes = ([[1, 0, 0], [0, 1, 0], [0, 0, 1]] as Vec3[]).map((e) => quatRotate(inv, quatRotate(shape.rotation, e)));
-  return { center, bound: length(half), sphereR: 0, axes, half };
+  const ext: Vec3 = [0, 1, 2].map((i) => Math.abs(axes[0]![i]!) * half[0] + Math.abs(axes[1]![i]!) * half[1] + Math.abs(axes[2]![i]!) * half[2]) as Vec3;
+  return { center, bound: length(half), ext, sphereR: 0, axes, half };
 }
 
 /** Visits solid voxels of `sv` inside the shape. `fn` returns true to stop early. */
 function forVoxelsIn(sv: SimVolume, ls: LocalShape, fn: (x: number, y: number, z: number, v: number, depth: number, dist: number) => boolean | void): void {
   const vol = sv.volume;
-  const c = ls.center, r = ls.bound;
-  const x0 = Math.max(0, Math.floor(c[0] - r)), x1 = Math.min(vol.sizeX - 1, Math.ceil(c[0] + r));
-  const y0 = Math.max(0, Math.floor(c[1] - r)), y1 = Math.min(vol.sizeY - 1, Math.ceil(c[1] + r));
-  const z0 = Math.max(0, Math.floor(c[2] - r)), z1 = Math.min(vol.sizeZ - 1, Math.ceil(c[2] + r));
+  const c = ls.center, e = ls.ext;
+  const x0 = Math.max(0, Math.floor(c[0] - e[0])), x1 = Math.min(vol.sizeX - 1, Math.ceil(c[0] + e[0]));
+  const y0 = Math.max(0, Math.floor(c[1] - e[1])), y1 = Math.min(vol.sizeY - 1, Math.ceil(c[1] + e[1]));
+  const z0 = Math.max(0, Math.floor(c[2] - e[2])), z1 = Math.min(vol.sizeZ - 1, Math.ceil(c[2] + e[2]));
   for (let z = z0; z <= z1; z++)
     for (let y = y0; y <= y1; y++)
       for (let x = x0; x <= x1; x++) {

@@ -55,6 +55,8 @@ export interface VolumeOptions {
   castShadow?: boolean;
   /** Multiplies collider density (e.g. light, pushable props that look like concrete). */
   massScale?: number;
+  /** Velocity change in one step that detonates an explosive dynamic volume (default 3.2 m/s). */
+  impactDetonateDv?: number;
   userData?: unknown;
 }
 
@@ -83,6 +85,7 @@ export interface SimVolume {
   lastVel: Vec3;
   castShadow: boolean;
   massScale: number;
+  impactDv: number;
   userData: unknown;
 }
 
@@ -250,6 +253,7 @@ export class SimWorld {
   // ---------------------------------------------------------------- volumes
 
   addVolume(kind: VolumeKind, volume: VoxelVolume, position: Vec3, rotation: Quat, tag: VolumeTag, opts: VolumeOptions = {}): SimVolume {
+    if (kind !== 'static' && this.freeSlots.length === 0) this.evictOldestDebris();
     const slot = kind !== 'static' ? (this.freeSlots.shift() ?? -1) : -1;
     if (kind !== 'static' && slot < 0) throw new Error('Out of transform slots');
     const collide = opts.collide ?? true;
@@ -275,6 +279,7 @@ export class SimWorld {
       lastVel: [0, 0, 0],
       castShadow: opts.castShadow ?? true,
       massScale: opts.massScale ?? 1,
+      impactDv: opts.impactDetonateDv ?? EXPLOSIVE_IMPACT_DV,
       userData: opts.userData,
     };
     for (const ci of volume.nonEmptyChunks()) {
@@ -302,6 +307,13 @@ export class SimWorld {
     this.events.volumeAdded(this.info(sv));
     this.emit('volumeAdded', sv);
     return sv;
+  }
+
+  /** Frees a transform slot by crumbling the oldest debris (only when the slot pool is exhausted). */
+  private evictOldestDebris(): void {
+    let oldest: SimVolume | null = null;
+    for (const sv of this.volumes.values()) if (sv.tag === 'debris' && (!oldest || sv.createdAt < oldest.createdAt)) oldest = sv;
+    if (oldest) this.crumble(oldest);
   }
 
   private containsExplosive(volume: VoxelVolume): boolean {
@@ -445,6 +457,15 @@ export class SimWorld {
     const vol = sv.volume;
     if (sv.colliders >= 0) this.physics.removeColliders(sv.colliders);
     const materialKey = (v: number) => this.palette.materials[v]! + 1;
+    if (vol.voxelCount > 20_000) {
+      // Huge debris: coarse boxes straight away (exact merging would cost tens of ms).
+      let f = 2;
+      let coarse = mergeBoxesCoarse(vol, f);
+      while (coarse.length > MAX_BODY_BOXES * 2 && f < 16) coarse = mergeBoxesCoarse(vol, (f *= 2));
+      sv.colliders = this.physics.addBoxes(sv.body, this.boxShapes(sv, coarse, false));
+      vol.dirtyCollider.clear();
+      return;
+    }
     let boxes = mergeBoxes(vol, 0, 0, 0, vol.sizeX, vol.sizeY, vol.sizeZ, materialKey);
     let perMaterial = true;
     if (boxes.length > MAX_BODY_BOXES) {
@@ -527,16 +548,17 @@ export class SimWorld {
     for (const e of due) this.detonate(e.center, e.radius, e.power);
   }
 
-  /** Fireball + carve + shockwave. */
-  detonate(center: Vec3, radius: number, power: number): void {
+  /** Fireball + carve + shockwave. Returns what the blast carved. */
+  detonate(center: Vec3, radius: number, power: number): ReturnType<typeof carve> {
     for (let i = 0; i < 26; i++) {
       const a = this.random() * Math.PI * 2, u = this.random() * 2 - 1, s = 3 + this.random() * 6;
       const k = Math.sqrt(1 - u * u);
       this.emitParticle(center, [Math.cos(a) * k * s, Math.abs(u) * s + 2, Math.sin(a) * k * s], [1, 0.45 + this.random() * 0.4, 0.1], PARTICLE_FIRE);
     }
     this.emitSmoke(center, 18, radius * 0.6, [0.35, 0.33, 0.32]);
-    carve(this, { kind: 'sphere', center, radius }, power);
+    const r = carve(this, { kind: 'sphere', center, radius }, power);
     this.emit('explosion', center, radius, power);
+    return r;
   }
 
   /** Detonates an explosive volume (removed) at its center. */
@@ -607,7 +629,7 @@ export class SimWorld {
       const v = physics.linvel(sv.body);
       if (sv.explosive) {
         const dv = Math.hypot(v[0] - sv.lastVel[0], v[1] - sv.lastVel[1], v[2] - sv.lastVel[2]);
-        if (dv > EXPLOSIVE_IMPACT_DV) doomed.push(sv);
+        if (dv > sv.impactDv) doomed.push(sv);
       }
       sv.lastVel = v;
       const w = physics.angvel(sv.body);
@@ -685,13 +707,14 @@ export class SimWorld {
     let maxSlot = PLAYER_SLOT;
     if (this.player) {
       const p = this.player.position;
-      out.set([p[0], p[1], p[2], 0, 0, 0, 1], PLAYER_SLOT * SLOT_FLOATS);
+      out.set([p[0], p[1], p[2], 0, 0, 0, 1, 0], PLAYER_SLOT * SLOT_FLOATS);
     }
     for (const sv of this.volumes.values()) {
       if (sv.slot < 0) continue;
       const o = sv.slot * SLOT_FLOATS;
       if (this.physics && sv.body >= 0 && sv.kind === 'dynamic') this.physics.readTransform(sv.body, out, o);
       else out.set([...sv.position, ...sv.rotation], o);
+      out[o + 7] = sv.id; // slot owner: lets the renderer ignore stale data after slot reuse
       if (sv.slot > maxSlot) maxSlot = sv.slot;
     }
     return (maxSlot + 1) * SLOT_FLOATS;
