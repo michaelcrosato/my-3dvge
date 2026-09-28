@@ -8,6 +8,8 @@ export class Palette {
   readonly colors = new Uint8Array(256 * 4);
   readonly materials = new Uint8Array(256);
   private next = 1;
+  /** Bumped on every change so workers know when to re-send colors. */
+  version = 0;
 
   get size(): number {
     return this.next - 1;
@@ -39,6 +41,7 @@ export class Palette {
     this.colors[o + 2] = color & 255;
     this.colors[o + 3] = 255;
     this.materials[index] = typeof material === 'number' ? material : materialByName(material).id;
+    this.version++;
     if (index >= this.next) this.next = index + 1;
   }
 

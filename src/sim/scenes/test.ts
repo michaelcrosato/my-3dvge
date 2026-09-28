@@ -54,6 +54,6 @@ export const testScene: SceneDef = {
       ctx.addDynamic(crate, [wx, g * VOXEL_SIZE + 0.5 + i * 0.6, wz]);
     }
 
-    ctx.setSpawn(toWorld(160, g + 2, 150), 0);
+    ctx.setSpawn(toWorld(165, g, 185), 0.35);
   },
 };
