@@ -43,6 +43,19 @@ test('boots, is cross-origin isolated and keeps rendering', async ({ page, baseU
   expect(errors).toEqual([]);
 });
 
+test('triggerBlast breaks the pillar and creates new bodies', async ({ page, baseURL }) => {
+  const errors = trackErrors(page, new URL(baseURL!).origin);
+  await page.goto('/?scene=test&quality=low');
+  await page.waitForFunction(() => window.__engine?.ready === true && window.__engine.bodyCount > 0, undefined, { timeout: 60_000 });
+  const before = await page.evaluate(() => window.__engine!.bodyCount);
+  const created = await page.evaluate(() => window.__engine!.triggerBlast());
+  expect(created).toBeGreaterThan(0);
+  await page.waitForFunction((b) => window.__engine!.bodyCount > b, before, { timeout: 10_000 });
+  const f = await frames(page);
+  await page.waitForFunction((n) => (window.__engine?.framesRendered ?? 0) > n + 10, f, { timeout: 30_000 });
+  expect(errors).toEqual([]);
+});
+
 test('forced WebGL2 fallback renders', async ({ page, baseURL }) => {
   const errors = trackErrors(page, new URL(baseURL!).origin);
   await page.goto('/?scene=test&quality=low&renderer=webgl');

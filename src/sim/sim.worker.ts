@@ -3,6 +3,7 @@
 import type { MainToSim, SimToMain } from '../shared/protocol.ts';
 import { MAX_SLOTS, TransformWriter } from '../shared/transforms.ts';
 import { errorMessage, forwardWorkerErrors, workerScope } from '../shared/worker-scope.ts';
+import { blast } from './destruction.ts';
 import { MeshDispatcher } from './mesh-dispatch.ts';
 import { RapierBackend } from './physics/rapier-backend.ts';
 import { getScene } from './scenes/index.ts';
@@ -95,6 +96,12 @@ function handle(msg: MainToSim): void {
     case 'input':
       world.input = msg.input;
       break;
+    case 'blast': {
+      const r = blast(world, msg.origin, msg.dir, msg.radius, msg.power);
+      post({ type: 'blastDone', id: msg.id, newBodies: r.newBodies, removedVoxels: r.removedVoxels });
+      if (r.particles.length) post({ type: 'particles', data: r.particles }, [r.particles.buffer]);
+      break;
+    }
     case 'spawnCrate':
       world.spawnCrate(msg.origin, msg.dir);
       break;
