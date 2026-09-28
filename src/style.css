@@ -226,3 +226,29 @@ body {
 .tuning-panel .lil-gui.root {
   position: static;
 }
+
+.status {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--ui-bg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.bench-report pre {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+#ui .modal {
+  pointer-events: auto;
+}

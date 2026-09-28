@@ -68,11 +68,14 @@ async function init(msg: Extract<MainToSim, { type: 'init' }>): Promise<void> {
     {
       volumeAdded: (volume) => post({ type: 'volumeAdded', volume }),
       volumeRemoved: (id) => post({ type: 'volumeRemoved', id }),
+      status: (text) => post({ type: 'status', text }),
     },
     physics,
   );
   const scene = getScene(msg.params.scene);
-  scene.build(world.sceneContext());
+  const ctx = world.sceneContext();
+  await scene.build(ctx);
+  if (scene.update) world.sceneUpdate = (dt) => scene.update!(ctx, dt);
   world.syncColliders(); // build static colliders up front, not inside the first step
   world.spawnPlayer();
   paletteVersion = world.palette.version;

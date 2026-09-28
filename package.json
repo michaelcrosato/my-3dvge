@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "gen:assets": "node scripts/gen-assets.ts"
   },
   "dependencies": {
     "@dimforge/rapier3d-simd-compat": "^0.21.0",

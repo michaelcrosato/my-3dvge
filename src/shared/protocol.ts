@@ -68,6 +68,7 @@ export type SimToMain =
   | { type: 'frame'; frame: number; time: number; transforms: Float32Array }
   | { type: 'particles'; data: Float32Array }
   | { type: 'blastDone'; id: number; newBodies: number; removedVoxels: number }
+  | { type: 'status'; text: string }
   | { type: 'error'; message: string; stack?: string };
 
 export interface MeshJob {
