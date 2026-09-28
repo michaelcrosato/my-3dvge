@@ -2,9 +2,9 @@
 
 export type RendererPref = 'auto' | 'webgpu' | 'webgl';
 export type QualityName = 'low' | 'medium' | 'high';
-export type SceneName = 'test' | 'city' | 'stress';
+export type SceneName = 'test' | 'city' | 'stress' | 'gallery' | 'cinder' | 'quarry';
 
-export const SCENE_NAMES: readonly SceneName[] = ['test', 'city', 'stress'];
+export const SCENE_NAMES: readonly SceneName[] = ['test', 'city', 'stress', 'gallery', 'cinder', 'quarry'];
 export const QUALITY_NAMES: readonly QualityName[] = ['low', 'medium', 'high'];
 
 export interface Params {
@@ -24,7 +24,7 @@ export interface Params {
 export const DEFAULT_PARAMS: Params = {
   renderer: 'auto',
   quality: null,
-  scene: 'test',
+  scene: 'cinder',
   maxBodies: 150,
   bench: false,
   benchTime: 300,
@@ -53,7 +53,7 @@ export function parseParams(search: string): Params {
     renderer: oneOf(q.get('renderer'), ['auto', 'webgpu', 'webgl'] as const) ?? DEFAULT_PARAMS.renderer,
     quality: oneOf(q.get('quality'), QUALITY_NAMES) ?? DEFAULT_PARAMS.quality,
     scene: oneOf(q.get('scene'), SCENE_NAMES) ?? DEFAULT_PARAMS.scene,
-    maxBodies: positiveInt(q.get('maxBodies'), 1, 2000) ?? DEFAULT_PARAMS.maxBodies,
+    maxBodies: positiveInt(q.get('maxBodies'), 1, 1500) ?? DEFAULT_PARAMS.maxBodies,
     bench: flag(q.get('bench')) ?? DEFAULT_PARAMS.bench,
     benchTime: positiveInt(q.get('benchTime'), 5, 3600) ?? DEFAULT_PARAMS.benchTime,
     debug: flag(q.get('debug')) ?? DEFAULT_PARAMS.debug,

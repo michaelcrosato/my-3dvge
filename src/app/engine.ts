@@ -377,7 +377,12 @@ export class Engine {
     const sample = this.transforms.sample();
     this.sample = sample;
     if (sample) {
-      for (const [slot, view] of this.world.bySlot) interpolateSlot(sample, slot, view.group.position, view.group.quaternion);
+      for (const [slot, view] of this.world.bySlot) {
+        // A freshly spawned volume keeps its initial pose until the simulation has written its slot.
+        const owner = sample.curr[slot * 8 + 7];
+        if (owner !== undefined && owner !== view.info.id) continue;
+        interpolateSlot(sample, slot, view.group.position, view.group.quaternion);
+      }
       interpolateSlot(sample, PLAYER_SLOT, this.playerPos, this.tmpQuat);
     }
     if (this.client) return;

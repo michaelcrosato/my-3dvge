@@ -93,6 +93,8 @@ export class RapierBackend implements PhysicsBackend {
         desc.setDensity(b.density);
       }
       if (b.sensor) desc.setSensor(true);
+      if (b.rot) desc.setRotation({ x: b.rot[0], y: b.rot[1], z: b.rot[2], w: b.rot[3] });
+      if (b.frictionMin) desc.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min);
       list.push(this.world.createCollider(desc, body));
     }
     const g = this.nextGroup++;
@@ -194,6 +196,18 @@ export class RapierBackend implements PhysicsBackend {
 
   setGravityScale(h: BodyHandle, scale: number): void {
     this.bodies.get(h)?.setGravityScale(scale, true);
+  }
+
+  setLinvel(h: BodyHandle, v: Vec3): void {
+    this.bodies.get(h)?.setLinvel({ x: v[0], y: v[1], z: v[2] }, true);
+  }
+
+  setAngvel(h: BodyHandle, w: Vec3): void {
+    this.bodies.get(h)?.setAngvel({ x: w[0], y: w[1], z: w[2] }, true);
+  }
+
+  setEnabledRotations(h: BodyHandle, x: boolean, y: boolean, z: boolean): void {
+    this.bodies.get(h)?.setEnabledRotations(x, y, z, true);
   }
 
   raycast(origin: Vec3, dir: Vec3, maxDist: number, excludeBody?: BodyHandle): RayHit | null {

@@ -102,3 +102,45 @@ test('deployment serves cache headers', async ({ request }) => {
   expect(res.headers()['cache-control']).toContain('immutable');
   expect(res.headers()['cross-origin-embedder-policy']).toBe('require-corp');
 });
+
+test('PATHBREAKERS: title → mission → drive → path clear → results, without errors', async ({ page, baseURL }) => {
+  const errors = trackErrors(page, new URL(baseURL!).origin);
+  await page.goto('/?quality=low');
+  await page.waitForFunction(() => window.__pathbreakers?.level != null, undefined, { timeout: 60_000 });
+  expect(await page.evaluate(() => window.__pathbreakers!.flow)).toBe('title');
+  expect(await page.evaluate(() => window.__pathbreakers!.level!.totals)).toEqual({ buildings: 34, survivors: 8, rdus: 100, dishes: 2 });
+  await page.evaluate(() => window.__pathbreakers!.start('cinder', 'mission'));
+  await page.waitForFunction(() => window.__pathbreakers!.flow === 'briefing', undefined, { timeout: 30_000 });
+  await page.evaluate(() => {
+    window.__pathbreakers!.begin();
+    window.__pathbreakers!.send({ t: 'skipFlyover' });
+  });
+  await page.waitForFunction(() => window.__pathbreakers!.snapshot?.state === 'running', undefined, { timeout: 20_000 });
+  await page.keyboard.press('KeyE');
+  await page.waitForFunction(() => window.__pathbreakers!.snapshot?.player.vehicle === 'dozer', undefined, { timeout: 5_000 });
+  const x0 = await page.evaluate(() => window.__pathbreakers!.snapshot!.player.x);
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(1500);
+  await page.keyboard.up('KeyW');
+  expect(await page.evaluate(() => window.__pathbreakers!.snapshot!.player.x)).toBeGreaterThan(x0 + 1);
+  await page.evaluate(() => window.__pathbreakers!.send({ t: 'debug', cmd: 'clearLane' }));
+  await page.waitForFunction(() => window.__pathbreakers!.snapshot?.state === 'clear', undefined, { timeout: 10_000 });
+  await page.evaluate(() => window.__pathbreakers!.send({ t: 'finish' }));
+  await page.waitForFunction(() => window.__pathbreakers!.flow === 'results', undefined, { timeout: 10_000 });
+  expect(errors).toEqual([]);
+});
+
+test('PATHBREAKERS: Quarry Rumble bonus stage loads in place', async ({ page, baseURL }) => {
+  const errors = trackErrors(page, new URL(baseURL!).origin);
+  await page.goto('/?quality=low');
+  await page.waitForFunction(() => window.__pathbreakers?.level != null, undefined, { timeout: 60_000 });
+  await page.evaluate(() => window.__pathbreakers!.start('quarry', 'mission'));
+  await page.waitForFunction(() => window.__pathbreakers!.level?.level === 'quarry' && window.__pathbreakers!.flow === 'briefing', undefined, { timeout: 60_000 });
+  await page.evaluate(() => {
+    window.__pathbreakers!.begin();
+    window.__pathbreakers!.send({ t: 'skipFlyover' });
+  });
+  await page.waitForFunction(() => window.__pathbreakers!.snapshot?.state === 'running', undefined, { timeout: 20_000 });
+  expect(await page.evaluate(() => window.__pathbreakers!.snapshot!.targetsLeft)).toBe(12);
+  expect(errors).toEqual([]);
+});

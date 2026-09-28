@@ -104,25 +104,38 @@ export class Structures {
       const { pos, rot } = world.volumePose(sv);
       const fragments = s.def.fragments ?? 10;
       const lifetime = s.def.debrisLifetime ?? 7;
-      const maxDim = Math.max(vol.sizeX, vol.sizeY, vol.sizeZ);
-      const cell = Math.max(10, Math.ceil(maxDim / Math.cbrt(fragments)));
-      const ncx = Math.ceil(vol.sizeX / cell), ncy = Math.ceil(vol.sizeY / cell);
+      // Per-axis cells of roughly equal volume, 10..48 voxels (no slivers, no 10 m monoliths).
+      const target = Math.min(48, Math.max(10, Math.ceil(Math.cbrt((vol.sizeX * vol.sizeY * vol.sizeZ) / fragments))));
+      const cellX = Math.ceil(vol.sizeX / Math.max(1, Math.round(vol.sizeX / target)));
+      const cellY = Math.ceil(vol.sizeY / Math.max(1, Math.round(vol.sizeY / target)));
+      const cellZ = Math.ceil(vol.sizeZ / Math.max(1, Math.round(vol.sizeZ / target)));
+      const cell = Math.max(cellX, cellY, cellZ);
+      const ncx = Math.ceil(vol.sizeX / cellX), ncy = Math.ceil(vol.sizeY / cellY);
       const buckets = new Map<number, number[]>();
       vol.forEachSolid((x, y, z) => {
-        const key = Math.floor(x / cell) + ncx * (Math.floor(y / cell) + ncy * Math.floor(z / cell));
+        const key = ((x / cellX) | 0) + ncx * (((y / cellY) | 0) + ncy * ((z / cellZ) | 0));
         let b = buckets.get(key);
         if (!b) buckets.set(key, (b = []));
         b.push(x, y, z);
       });
+      void cell;
       const mid: Vec3 = [vol.sizeX / 2, 0, vol.sizeZ / 2];
-      for (const coords of buckets.values()) {
+      const c = world.palette.colors;
+      const colorOf = (v: number): [number, number, number] => [c[v * 4]! / 255, c[v * 4 + 1]! / 255, c[v * 4 + 2]! / 255];
+      const heightCells = Math.max(1, Math.ceil(vol.sizeY / cellY));
+      for (const [key, coords] of buckets) {
         const n = coords.length / 3;
-        if (n < 24) {
-          for (let i = 0; i < coords.length && i < 18; i += 3) {
+        const cy = Math.floor(key / ncx) % ncy;
+        // The ground-floor cells crumble to dust so everything above drops and breaks apart.
+        const crumble = n < 24 || (cy === 0 && heightCells > 1);
+        if (crumble) {
+          const samples = n < 24 ? Math.min(6, n) : 20;
+          const stride = Math.max(1, Math.floor(n / samples));
+          for (let k = 0; k < samples; k++) {
+            const i = k * stride * 3;
             const v = vol.get(coords[i]!, coords[i + 1]!, coords[i + 2]!);
             const p = add(pos, quatRotate(rot, [(coords[i]! + 0.5) * VOXEL_SIZE, (coords[i + 1]! + 0.5) * VOXEL_SIZE, (coords[i + 2]! + 0.5) * VOXEL_SIZE]));
-            const c = world.palette.colors;
-            world.emitParticle(p, [(world.random() - 0.5) * 3, world.random() * 2, (world.random() - 0.5) * 3], [c[v * 4]! / 255, c[v * 4 + 1]! / 255, c[v * 4 + 2]! / 255], PARTICLE_DEBRIS);
+            world.emitParticle(p, [(world.random() - 0.5) * 3, world.random() * 2, (world.random() - 0.5) * 3], colorOf(v), PARTICLE_DEBRIS);
           }
           continue;
         }
@@ -133,12 +146,24 @@ export class Structures {
           z0 = Math.min(z0, coords[i + 2]!); z1 = Math.max(z1, coords[i + 2]!);
         }
         const piece = new VoxelVolume(x1 - x0 + 1, y1 - y0 + 1, z1 - z0 + 1);
-        for (let i = 0; i < coords.length; i += 3) piece.set(coords[i]! - x0, coords[i + 1]! - y0, coords[i + 2]! - z0, vol.get(coords[i]!, coords[i + 1]!, coords[i + 2]!));
+        for (let i = 0; i < coords.length; i += 3) {
+          const x = coords[i]!, y = coords[i + 1]!, z = coords[i + 2]!;
+          // Erode seams between cells so the pieces don't settle back into a perfect stack
+          // (only voxels on a cell boundary can touch another cell).
+          const lx = x % cellX, ly = y % cellY, lz = z % cellZ;
+          if ((lx === 0 && vol.get(x - 1, y, z)) || (lx === cellX - 1 && vol.get(x + 1, y, z)) || (lz === 0 && vol.get(x, y, z - 1)) || (lz === cellZ - 1 && vol.get(x, y, z + 1)) || (ly === 0 && vol.get(x, y - 1, z))) {
+            if (hashSeam(x, y, z) < 0.7) continue;
+          }
+          piece.set(x - x0, y - y0, z - z0, vol.get(x, y, z));
+        }
+        if (piece.voxelCount < 24) continue;
         const cellMid: Vec3 = [(x0 + x1) / 2 - mid[0], 0, (z0 + z1) / 2 - mid[2]];
         const len = Math.hypot(cellMid[0], cellMid[2]) || 1;
-        const outward = 0.6 + world.random() * 1.6;
-        const lin = quatRotate(rot, [(cellMid[0] / len) * outward, -0.5 + world.random() * 1.5, (cellMid[2] / len) * outward]);
-        const ang: Vec3 = [(world.random() - 0.5) * 2, (world.random() - 0.5) * 1.5, (world.random() - 0.5) * 2];
+        const heightFrac = (y0 + y1) / 2 / Math.max(1, vol.sizeY);
+        const outward = 0.8 + heightFrac * 3.5 + world.random() * 1.2;
+        const lin = quatRotate(rot, [(cellMid[0] / len) * outward + (world.random() - 0.5), -1 - world.random() * 1.5, (cellMid[2] / len) * outward + (world.random() - 0.5)]);
+        const spin = 0.6 + heightFrac * 1.8;
+        const ang: Vec3 = [(world.random() - 0.5) * 2 * spin, (world.random() - 0.5) * spin, (world.random() - 0.5) * 2 * spin];
         world.addVolume('dynamic', piece, add(pos, quatRotate(rot, scale([x0, y0, z0], VOXEL_SIZE))), rot, 'debris', {
           velocity: { lin, ang },
           lifetime: lifetime + world.random() * 3,
@@ -156,4 +181,10 @@ export class Structures {
   standing(): Structure[] {
     return [...this.byVolume.values()].filter((s) => !s.collapsed);
   }
+}
+
+function hashSeam(x: number, y: number, z: number): number {
+  let h = (x * 374761393 + y * 668265263 + z * 2147483647) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }

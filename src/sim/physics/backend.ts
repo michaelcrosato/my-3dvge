@@ -25,6 +25,10 @@ export interface BoxShape {
   /** Explicit mass properties (e.g. a low center of mass for vehicles). */
   mass?: { mass: number; com: Vec3; inertia: Vec3 };
   sensor?: boolean;
+  /** Box rotation in body space (e.g. tilted ramp slabs). */
+  rot?: Quat;
+  /** Use the lower of the two friction coefficients in contacts (slippery, e.g. a jet mech on walls). */
+  frictionMin?: boolean;
 }
 
 export interface BodyOptions {
@@ -101,6 +105,10 @@ export interface PhysicsBackend {
   /** Teleports a body (optionally zeroing its velocity). */
   setPose(body: BodyHandle, position: Vec3, rotation: Quat, resetVelocity?: boolean): void;
   setGravityScale(body: BodyHandle, scale: number): void;
+  setLinvel(body: BodyHandle, v: Vec3): void;
+  setAngvel(body: BodyHandle, w: Vec3): void;
+  /** Allow rotation only about the chosen world axes (e.g. y only for upright walkers). */
+  setEnabledRotations(body: BodyHandle, x: boolean, y: boolean, z: boolean): void;
 
   raycast(origin: Vec3, dir: Vec3, maxDist: number, excludeBody?: BodyHandle): RayHit | null;
   /** Dynamic bodies whose colliders intersect a sphere. */

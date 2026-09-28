@@ -15,7 +15,15 @@ async function boot(): Promise<void> {
   engine.start();
 }
 
-boot().catch((err: unknown) => {
+const harness = new URLSearchParams(location.search).get('harness');
+const start: () => Promise<void> =
+  harness === 'ui'
+    ? () => import('./game/client/ui/harness.ts').then((m) => m.runHarness(ui))
+    : harness === 'audio'
+      ? () => import('./game/client/audio/harness.ts').then((m) => m.runHarness(ui))
+      : boot;
+
+start().catch((err: unknown) => {
   const loading = document.getElementById('loading');
   if (loading) loading.textContent = 'Failed to start — see errors below.';
   reportError('boot', err, 'boot');
