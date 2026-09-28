@@ -33,6 +33,8 @@ test('boots, is cross-origin isolated and keeps rendering', async ({ page, baseU
 
   const first = await frames(page);
   await page.waitForFunction((f) => (window.__engine?.framesRendered ?? 0) > f + 10, first, { timeout: 30_000 });
+  // Voxel chunks were meshed by the worker pool and uploaded.
+  await page.waitForFunction(() => Number(window.__engine!.stats().chunkMeshes ?? 0) > 0, undefined, { timeout: 30_000 });
   const stats = await page.evaluate(() => window.__engine!.stats());
   console.log(`renderer=${await page.evaluate(() => window.__engine!.renderer)} stats=${JSON.stringify(stats)}`);
 
